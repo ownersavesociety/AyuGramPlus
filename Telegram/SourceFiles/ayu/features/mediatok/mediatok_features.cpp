@@ -163,9 +163,13 @@ void RunYtDlpDownload(
 	).absoluteFilePath();
 	QDir().mkpath(jobDir);
 
-	const auto showErrorOrFallback = [=](const QString &err) mutable {
-		if (fallbackMessage.has_value()) {
-			auto msg = std::move(*fallbackMessage);
+	const auto fallbackHolder = std::make_shared<std::optional<Api::MessageToSend>>(
+		std::move(fallbackMessage));
+
+	const auto showErrorOrFallback = [=](const QString &err) {
+		if (fallbackHolder->has_value()) {
+			auto msg = std::move(**fallbackHolder);
+			fallbackHolder->reset();
 			msg.action.generateLocal = true;
 			session->api().sendMessage(std::move(msg));
 			return;
@@ -209,7 +213,7 @@ void RunYtDlpDownload(
 			}
 		}
 
-		crl::on_main(session, [=]() mutable {
+		crl::on_main(session, [=] {
 			if (!ok || downloadedPath.isEmpty()) {
 				QDir(jobDir).removeRecursively();
 				showErrorOrFallback(
@@ -266,13 +270,16 @@ void DownloadAndSendVideoFromUrl(
 	}
 
 	controller->showToast(u"MediaTok: скачиваю yt-dlp.exe (один раз)..."_q);
-	DownloadYtDlp(session, [=, fallback = std::move(fallbackMessage)](
+	const auto fallbackHolder = std::make_shared<std::optional<Api::MessageToSend>>(
+		std::move(fallbackMessage));
+	DownloadYtDlp(session, [=](
 			QString exePath,
-			QString error) mutable {
+			QString error) {
 		const auto strong = weak.get();
 		if (exePath.isEmpty()) {
-			if (fallback.has_value()) {
-				auto msg = std::move(*fallback);
+			if (fallbackHolder->has_value()) {
+				auto msg = std::move(**fallbackHolder);
+				fallbackHolder->reset();
 				msg.action.generateLocal = true;
 				session->api().sendMessage(std::move(msg));
 			} else if (strong) {
@@ -282,13 +289,15 @@ void DownloadAndSendVideoFromUrl(
 		}
 		if (strong) {
 			strong->showToast(u"MediaTok: скачиваю видео..."_q);
+			auto nextFallback = std::move(*fallbackHolder);
+			fallbackHolder->reset();
 			RunYtDlpDownload(
 				strong,
 				history,
 				baseAction,
 				exePath,
 				url,
-				std::move(fallback));
+				std::move(nextFallback));
 		}
 	});
 }
