@@ -458,6 +458,11 @@ void DeleteMyMessagesInPeer(
 	if (const auto channel = peer->asChannel()) {
 		if (channel->isMegagroup() && channel->canDeleteMessages()) {
 			session->api().deleteAllFromParticipant(channel, session->user());
+			if (const auto strong = weakController.get()) {
+				if (!onDone) {
+					strong->showToast(u"MediaTok: все ваши сообщения удалены у всех"_q);
+				}
+			}
 			if (onDone) {
 				onDone(0);
 			}
@@ -466,6 +471,7 @@ void DeleteMyMessagesInPeer(
 	}
 
 	auto collected = std::make_shared<std::vector<MsgId>>();
+	auto seenIds = std::make_shared<std::unordered_set<int64>>();
 	const auto removeNext = std::make_shared<Fn<void(int)>>();
 	const auto requestNext = std::make_shared<Fn<void(MsgId)>>();
 
@@ -473,8 +479,10 @@ void DeleteMyMessagesInPeer(
 		if (index >= int(collected->size())) {
 			if (const auto strong = weakController.get()) {
 				if (!onDone) {
-					strong->showToast(
-						u"MediaTok: удалено %1 ваших сообщений"_q.arg(collected->size()));
+					strong->showToast(collected->empty()
+						? u"MediaTok: ваши сообщения в этом чате не найдены"_q
+						: u"MediaTok: удалено %1 ваших сообщений у всех"_q
+							.arg(collected->size()));
 				}
 			}
 			if (onDone) {
@@ -547,54 +555,97 @@ void DeleteMyMessagesInPeer(
 	};
 
 	*requestNext = [=](MsgId from) {
-		using Flag = MTPmessages_Search::Flag;
-		auto request = MTPmessages_Search(
-			MTP_flags(Flag::f_from_id),
-			peer->input(),
-			MTP_string(),
-			MTP_inputPeerSelf(),
-			MTPInputPeer(),
-			MTPVector<MTPReaction>(),
-			MTP_int(0),
-			MTP_inputMessagesFilterEmpty(),
-			MTP_int(0),
-			MTP_int(0),
-			MTP_int(int(std::clamp(from.bare, int64(0), int64(0x3FFFFFFF)))),
-			MTP_int(0),
-			MTP_int(100),
-			MTP_int(0),
-			MTP_int(0),
-			MTP_long(0));
-
-		session->api().request(std::move(request)).done([=](const Api::HistoryRequestResult &result) {
-			auto parsed = Api::ParseHistoryResult(peer, from, Data::LoadDirection::Before, result);
+		const auto mtpOffsetId = int(std::clamp(
+			from.bare,
+			int64(0),
+			int64(0x3FFFFFFF)));
+		const auto onPage = [=](const Api::HistoryRequestResult &result) {
+			auto parsed = Api::ParseHistoryResult(
+				peer,
+				from,
+				Data::LoadDirection::Before,
+				result);
+			const auto rawCount = [&] {
+				switch (result.type()) {
+				case mtpc_messages_messages:
+					return int(result.c_messages_messages().vmessages().v.size());
+				case mtpc_messages_messagesSlice:
+					return int(result.c_messages_messagesSlice().vmessages().v.size());
+				case mtpc_messages_channelMessages:
+					return int(result.c_messages_channelMessages().vmessages().v.size());
+				default:
+					return 0;
+				}
+			}();
 			MsgId minId;
 			for (const auto &id : parsed.messageIds) {
 				if (!minId || id < minId) {
 					minId = id;
 				}
 				if (const auto item = peer->owner().message(peer->id, id)) {
-					if (item->out()) {
+					if (item->out() && !item->isService()) {
+						if (seenIds->insert(id.bare).second) {
+							collected->push_back(id);
+						}
+					}
+				} else if (!peer->isUser()) {
+					if (seenIds->insert(id.bare).second) {
 						collected->push_back(id);
 					}
-				} else {
-					collected->push_back(id);
 				}
 			}
-			if (parsed.messageIds.size() == 100 && minId) {
+			if (rawCount >= 100 && minId > MsgId(1) && (!from || minId < from)) {
 				base::call_delayed(crl::time(250), session, [=] {
-					(*requestNext)(minId - MsgId(1));
+					(*requestNext)(minId);
 				});
 			} else {
 				(*removeNext)(0);
 			}
-		}).fail([=](const MTP::Error &) {
+		};
+		const auto onFail = [=](const MTP::Error &) {
+			if (!collected->empty()) {
+				(*removeNext)(0);
+				return;
+			}
 			if (onDone) {
 				onDone(0);
 			}
 			*removeNext = nullptr;
 			*requestNext = nullptr;
-		}).send();
+		};
+
+		if (peer->isUser()) {
+			session->api().request(MTPmessages_GetHistory(
+				peer->input(),
+				MTP_int(mtpOffsetId),
+				MTP_int(0),
+				MTP_int(0),
+				MTP_int(100),
+				MTP_int(0),
+				MTP_int(0),
+				MTP_long(0)
+			)).done(onPage).fail(onFail).handleFloodErrors().send();
+		} else {
+			using Flag = MTPmessages_Search::Flag;
+			session->api().request(MTPmessages_Search(
+				MTP_flags(Flag::f_from_id),
+				peer->input(),
+				MTP_string(),
+				MTP_inputPeerSelf(),
+				MTPInputPeer(),
+				MTPVector<MTPReaction>(),
+				MTP_int(0),
+				MTP_inputMessagesFilterEmpty(),
+				MTP_int(0),
+				MTP_int(0),
+				MTP_int(mtpOffsetId),
+				MTP_int(0),
+				MTP_int(100),
+				MTP_int(0),
+				MTP_int(0),
+				MTP_long(0)
+			)).done(onPage).fail(onFail).handleFloodErrors().send();
+		}
 	};
 
 	(*requestNext)(MsgId(0));

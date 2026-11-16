@@ -3568,6 +3568,7 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 							[=] { _menu = nullptr; }));
 					}
 				}
+				AyuUi::AddDeleteAllFromAuthorAction(_menu, _controller, item);
 				if (!blockSender && item->suggestReport()) {
 					_menu->addAction(tr::lng_context_report_msg(tr::now), [=] {
 						reportItem(itemId);
@@ -3888,6 +3889,7 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 							[=] { _menu = nullptr; }));
 					}
 				}
+				AyuUi::AddDeleteAllFromAuthorAction(_menu, _controller, item);
 				if (!canBlockSender && canReport) {
 					_menu->addAction(tr::lng_context_report_msg(tr::now), [=] {
 						reportAsGroup(itemId);

@@ -1034,6 +1034,45 @@ void AddBurnAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 		&st::menuIconTTLAny);
 }
 
+void AddDeleteAllFromAuthorAction(
+		not_null<Ui::PopupMenu*> menu,
+		not_null<Window::SessionController*> controller,
+		HistoryItem *item) {
+	if (!item || !item->isRegular() || item->isLocal() || !item->out()) {
+		return;
+	}
+	const auto peer = item->history()->peer;
+	if (peer->isChannel() && !peer->isMegagroup()) {
+		return;
+	}
+	const auto weak = base::make_weak(controller);
+	const auto addAction = Ui::Menu::CreateAddActionCallback(menu);
+	addAction({
+		.text = u"Удалить все от автора"_q,
+		.handler = [=] {
+			const auto strong = weak.get();
+			if (!strong || strong->showFrozenError()) {
+				return;
+			}
+			strong->show(Ui::MakeConfirmBox({
+				.text = u"Удалить ВСЕ ваши сообщения в этом чате у всех?"_q,
+				.confirmed = [=](Fn<void()> &&close) {
+					close();
+					if (const auto s = weak.get()) {
+						s->showToast(u"MediaTok: собираю и удаляю ваши сообщения..."_q);
+						MediaTok::DeleteMyMessagesInPeer(peer, s);
+					}
+				},
+				.confirmText = u"Удалить у всех"_q,
+				.cancelText = tr::lng_cancel(),
+				.confirmStyle = &st::attentionBoxButton,
+			}));
+		},
+		.icon = &st::menuIconDelete,
+		.isAttention = true,
+	});
+}
+
 void AddCreateFilterAction(not_null<Ui::PopupMenu*> menu,
 						   not_null<Window::SessionController*> controller,
 						   HistoryItem *item,

@@ -1422,6 +1422,12 @@ void AddMessageActions(
 	AddOfferAction(menu, request, list);
 	AddSendNowAction(menu, request, list);
 	AddDeleteAction(menu, request, list);
+	if (request.item && request.selectedItems.empty()) {
+		AyuUi::AddDeleteAllFromAuthorAction(
+			menu,
+			list->controller(),
+			request.item);
+	}
 	AddDownloadFilesAction(menu, request, list);
 	AddSaveRichHtmlAction(menu, request, list);
 	AddReportAction(menu, request, list);
