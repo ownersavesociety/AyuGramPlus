@@ -1069,6 +1069,27 @@ void AyuSettings::setStreamerMode(bool val) {
 	save();
 }
 
+void AyuSettings::setCustomPhone(const QString &val) {
+	if (_customPhone.current() == val) return;
+	_customPhone = val;
+	repaintApp();
+	save();
+}
+
+void AyuSettings::setCustomUsernames(const QString &val) {
+	if (_customUsernames.current() == val) return;
+	_customUsernames = val;
+	repaintApp();
+	save();
+}
+
+void AyuSettings::setCustomBio(const QString &val) {
+	if (_customBio.current() == val) return;
+	_customBio = val;
+	repaintApp();
+	save();
+}
+
 void to_json(nlohmann::json &j, const AyuSettings &s) {
 	auto ghostAccounts = nlohmann::json::object();
 	for (const auto &[key, value] : s._ghostAccounts) {
@@ -1165,6 +1186,9 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"avatarCorners", s._avatarCorners.current()},
 		{"singleCornerRadius", s._singleCornerRadius.current()},
 		{"streamerMode", s._streamerMode.current()},
+		{"customPhone", s._customPhone.current()},
+		{"customUsernames", s._customUsernames.current()},
+		{"customBio", s._customBio.current()},
 		{"messageShotSettings", s._messageShotSettings}
 	};
 }
@@ -1269,6 +1293,9 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._avatarCorners = j.value("avatarCorners", defaults._avatarCorners.current());
 	s._singleCornerRadius = j.value("singleCornerRadius", defaults._singleCornerRadius.current());
 	s._streamerMode = j.value("streamerMode", defaults._streamerMode.current());
+	s._customPhone = j.value("customPhone", defaults._customPhone.current());
+	s._customUsernames = j.value("customUsernames", defaults._customUsernames.current());
+	s._customBio = j.value("customBio", defaults._customBio.current());
 
 	if (j.contains("messageShotSettings") && j["messageShotSettings"].is_object()) {
 		j["messageShotSettings"].get_to(s._messageShotSettings);

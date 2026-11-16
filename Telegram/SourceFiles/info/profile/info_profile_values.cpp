@@ -36,6 +36,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_premium_limits.h"
 #include "boxes/peers/edit_peer_permissions_box.h"
 #include "base/unixtime.h"
+#include "ayu/ayu_settings.h"
+
+#include <QtCore/QRegularExpression>
 
 namespace Info {
 namespace Profile {
@@ -43,20 +46,50 @@ namespace {
 
 using UpdateFlag = Data::PeerUpdate::Flag;
 
+std::vector<QString> ParseCustomUsernames(const QString &raw) {
+	std::vector<QString> result;
+	const auto parts = raw.split(
+		QRegularExpression(u"[,\\s;|]+"_q),
+		Qt::SkipEmptyParts);
+	for (auto part : parts) {
+		while (part.startsWith('@')) {
+			part = part.mid(1);
+		}
+		if (!part.isEmpty()) {
+			result.push_back(part);
+		}
+	}
+	return result;
+}
+
 auto PlainAboutValue(not_null<PeerData*> peer) {
-	return peer->session().changes().peerFlagsValue(
-		peer,
-		UpdateFlag::About
-	) | rpl::map([=] {
+	return rpl::combine(
+		peer->session().changes().peerFlagsValue(
+			peer,
+			UpdateFlag::About),
+		AyuSettings::getInstance().customBioValue()
+	) | rpl::map([=](auto, const QString &customBio) {
+		if (peer->isSelf() && !customBio.trimmed().isEmpty()) {
+			return customBio;
+		}
 		return peer->about();
 	});
 }
 
 auto PlainUsernameValue(not_null<PeerData*> peer) {
-	return rpl::merge(
-		peer->session().changes().peerFlagsValue(peer, UpdateFlag::Username),
-		peer->session().changes().peerFlagsValue(peer, UpdateFlag::Usernames)
-	) | rpl::map([=] {
+	return rpl::combine(
+		rpl::merge(
+			peer->session().changes().peerFlagsValue(peer, UpdateFlag::Username),
+			peer->session().changes().peerFlagsValue(peer, UpdateFlag::Usernames)
+		),
+		AyuSettings::getInstance().customUsernamesValue()
+	) | rpl::map([=](auto, const QString &customRaw) {
+		if (peer->isSelf()) {
+			const auto parsed = ParseCustomUsernames(customRaw);
+			if (!parsed.empty()) {
+				return parsed.front();
+			}
+		}
 		return peer->username();
 	});
 }
@@ -125,12 +158,18 @@ rpl::producer<int32> ColorIdValue(not_null<Data::ForumTopic*> topic) {
 }
 
 rpl::producer<TextWithEntities> PhoneValue(not_null<UserData*> user) {
-	return rpl::merge(
-		Countries::Instance().updated(),
-		user->session().changes().peerFlagsValue(
-			user,
-			UpdateFlag::PhoneNumber) | rpl::to_empty
-	) | rpl::map([=] {
+	return rpl::combine(
+		rpl::merge(
+			Countries::Instance().updated(),
+			user->session().changes().peerFlagsValue(
+				user,
+				UpdateFlag::PhoneNumber) | rpl::to_empty
+		),
+		AyuSettings::getInstance().customPhoneValue()
+	) | rpl::map([=](auto, const QString &customPhone) {
+		if (user->isSelf() && !customPhone.trimmed().isEmpty()) {
+			return tr::marked(customPhone.trimmed());
+		}
 		return tr::marked(Ui::FormatPhone(user->phone()));
 	});
 }
@@ -224,7 +263,16 @@ rpl::producer<std::vector<TextWithEntities>> UsernamesValue(
 		peer->session().changes().peerFlagsValue(peer, UpdateFlag::Usernames)
 	);
 	if (const auto user = peer->asUser()) {
-		return std::move(value) | rpl::map([=] {
+		return rpl::combine(
+			std::move(value),
+			AyuSettings::getInstance().customUsernamesValue()
+		) | rpl::map([=](auto, const QString &customRaw) {
+			if (user->isSelf()) {
+				const auto parsed = ParseCustomUsernames(customRaw);
+				if (!parsed.empty()) {
+					return map(parsed);
+				}
+			}
 			return map(user->usernames());
 		});
 	} else if (const auto channel = peer->asChannel()) {

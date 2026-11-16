@@ -58,6 +58,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
 #include "window/window_peer_menu.h"
+#include "ayu/ayu_settings.h"
+#include "ayu/ui/boxes/edit_mark_box.h"
 #include "apiwrap.h"
 #include "api/api_peer_photo.h"
 #include "api/api_user_names.h"
@@ -723,6 +725,44 @@ void SetupRows(
 		targets->username = usernameButton;
 	}
 
+	AddRow(
+		container,
+		rpl::single(u"MediaTok: Визуальный номер"_q),
+		AyuSettings::getInstance().customPhoneValue(
+		) | rpl::map([](const QString &v) {
+			return tr::marked(v.isEmpty() ? u"Задать любой номер (+888...)"_q : v);
+		}),
+		u"Изменить визуальный номер"_q,
+		[=] {
+			controller->show(Box<EditMarkBox>(
+				rpl::single(u"Любой номер телефона"_q),
+				AyuSettings::getInstance().customPhone(),
+				QString(),
+				[](const QString &value) {
+					AyuSettings::getInstance().setCustomPhone(value.trimmed());
+				}));
+		},
+		{ &st::menuIconPhone });
+
+	AddRow(
+		container,
+		rpl::single(u"MediaTok: Свои @юз (1-й, 2-й, 3-й...)"_q),
+		AyuSettings::getInstance().customUsernamesValue(
+		) | rpl::map([](const QString &v) {
+			return tr::marked(v.isEmpty() ? u"Через запятую: @юз1, @юз2, @юз3"_q : v);
+		}),
+		u"Изменить @юзернеймы"_q,
+		[=] {
+			controller->show(Box<EditMarkBox>(
+				rpl::single(u"Юзернеймы через запятую (1-й, 2-й...)"_q),
+				AyuSettings::getInstance().customUsernames(),
+				QString(),
+				[](const QString &value) {
+					AyuSettings::getInstance().setCustomUsernames(value.trimmed());
+				}));
+		},
+		{ &st::menuIconUsername });
+
 	Ui::AddSkip(container);
 	Ui::AddDividerText(container, tr::lng_settings_username_about());
 }
@@ -791,8 +831,14 @@ void SetupBio(
 			countLeft < 0 ? st::boxTextFgError->c : std::optional<QColor>());
 	};
 	const auto save = [=] {
-		self->session().api().saveSelfBio(
-			TextUtilities::PrepareForSending(bio->getLastText()));
+		const auto fullBio = bio->getLastText();
+		AyuSettings::getInstance().setCustomBio(fullBio);
+		auto serverBio = TextUtilities::PrepareForSending(fullBio);
+		const auto serverMax = self->isPremium() ? 140 : 70;
+		if (serverBio.size() > serverMax) {
+			serverBio = serverBio.left(serverMax);
+		}
+		self->session().api().saveSelfBio(serverBio);
 	};
 
 	Info::Profile::AboutValue(

@@ -89,15 +89,13 @@ int PremiumLimits::dialogShareableFiltersCurrent() const {
 }
 
 int PremiumLimits::dialogFiltersChatsDefault() const {
-	return appConfigLimit("dialog_filters_chats_limit_default", 100);
+	return 100000;
 }
 int PremiumLimits::dialogFiltersChatsPremium() const {
-	return appConfigLimit("dialog_filters_chats_limit_premium", 200);
+	return 100000;
 }
 int PremiumLimits::dialogFiltersChatsCurrent() const {
-	return isPremium()
-		? dialogFiltersChatsPremium()
-		: dialogFiltersChatsDefault();
+	return 100000;
 }
 
 int PremiumLimits::dialogFiltersLinksDefault() const {
@@ -113,43 +111,37 @@ int PremiumLimits::dialogFiltersLinksCurrent() const {
 }
 
 int PremiumLimits::dialogsPinnedDefault() const {
-	return appConfigLimit("dialogs_pinned_limit_default", 5);
+	return 100000;
 }
 int PremiumLimits::dialogsPinnedPremium() const {
-	return appConfigLimit("dialogs_pinned_limit_premium", 10);
+	return 100000;
 }
 int PremiumLimits::dialogsPinnedCurrent() const {
-	return isPremium()
-		? dialogsPinnedPremium()
-		: dialogsPinnedDefault();
+	return 100000;
 }
 
 int PremiumLimits::dialogsFolderPinnedDefault() const {
-	return appConfigLimit("dialogs_folder_pinned_limit_default", 100);
+	return 100000;
 }
 int PremiumLimits::dialogsFolderPinnedPremium() const {
-	return appConfigLimit("dialogs_folder_pinned_limit_premium", 200);
+	return 100000;
 }
 int PremiumLimits::dialogsFolderPinnedCurrent() const {
-	return isPremium()
-		? dialogsFolderPinnedPremium()
-		: dialogsFolderPinnedDefault();
+	return 100000;
 }
 
 int PremiumLimits::topicsPinnedCurrent() const {
-	return appConfigLimit("topics_pinned_limit", 5);
+	return 100000;
 }
 
 int PremiumLimits::savedSublistsPinnedDefault() const {
-	return appConfigLimit("saved_dialogs_pinned_limit_default", 5);
+	return 100000;
 }
 int PremiumLimits::savedSublistsPinnedPremium() const {
-	return appConfigLimit("saved_dialogs_pinned_limit_premium", 100);
+	return 100000;
 }
 int PremiumLimits::savedSublistsPinnedCurrent() const {
-	return isPremium()
-		? savedSublistsPinnedPremium()
-		: savedSublistsPinnedDefault();
+	return 100000;
 }
 
 int PremiumLimits::channelsPublicDefault() const {
@@ -203,15 +195,13 @@ int PremiumLimits::uploadMaxCurrent() const {
 }
 
 int PremiumLimits::aboutLengthDefault() const {
-	return appConfigLimit("about_length_limit_default", 70);
+	return 100000;
 }
 int PremiumLimits::aboutLengthPremium() const {
-	return appConfigLimit("about_length_limit_premium", 140);
+	return 100000;
 }
 int PremiumLimits::aboutLengthCurrent() const {
-	return isPremium()
-		? aboutLengthPremium()
-		: aboutLengthDefault();
+	return 100000;
 }
 
 int PremiumLimits::contactNoteLengthCurrent() const {

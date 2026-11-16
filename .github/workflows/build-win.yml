@@ -143,6 +143,7 @@ jobs:
         run: |
           set OUT=%TBUILD%\%REPO_NAME%\out\%BUILD_CONFIG%
           mkdir artifact
+          if exist "%OUT%\MediaTok.exe" move "%OUT%\MediaTok.exe" artifact\
           if exist "%OUT%\AyuGram.exe" move "%OUT%\AyuGram.exe" artifact\
           if exist "%OUT%\Telegram.exe" move "%OUT%\Telegram.exe" artifact\
           if exist "%OUT%\Updater.exe" move "%OUT%\Updater.exe" artifact\

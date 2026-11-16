@@ -72,7 +72,7 @@ void EditMarkBox::setInnerFocus() {
 }
 
 void EditMarkBox::submit() {
-	if (_text->getLastText().trimmed().isEmpty()) {
+	if (_text->getLastText().trimmed().isEmpty() && !_defaultValue.isEmpty()) {
 		_text->setFocus();
 		_text->showError();
 	} else {
