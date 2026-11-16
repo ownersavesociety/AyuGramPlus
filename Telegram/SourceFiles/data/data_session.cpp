@@ -97,6 +97,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_settings.h"
 #include "ayu/data/messages_storage.h"
 #include "ayu/features/filters/filters_controller.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/utils/telegram_helpers.h"
 
 
@@ -3676,6 +3677,9 @@ HistoryItem *Session::addNewMessage(
 		type);
 	if (type == NewMessageType::Unread) {
 		CheckForSwitchInlineButton(result);
+		if (result) {
+			MediaTok::CheckAutoDeleteIncoming(result);
+		}
 	}
 	return result;
 }

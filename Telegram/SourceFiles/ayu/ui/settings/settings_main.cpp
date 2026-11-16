@@ -15,6 +15,7 @@
 #include "ayu/ui/settings/settings_chats.h"
 #include "ayu/ui/settings/settings_filters.h"
 #include "ayu/ui/settings/settings_general.h"
+#include "ayu/ui/settings/settings_mediatok.h"
 #include "ayu/ui/settings/settings_other.h"
 #include "core/version.h"
 #include "settings/settings_builder.h"
@@ -100,6 +101,11 @@ void BuildCategories(SectionBuilder &builder) {
 
 	builder.addSubsectionTitle(tr::ayu_CategoriesHeader());
 
+	builder.addSectionButton({
+		.title = rpl::single(u"MediaTok: AI, Видео, Войсмод"_q),
+		.targetSection = AyuMediaTok::Id(),
+		.icon = { &st::menuIconPremium },
+	});
 	builder.addSectionButton({
 		.title = rpl::single(QString("MediaTok")),
 		.targetSection = AyuGhost::Id(),

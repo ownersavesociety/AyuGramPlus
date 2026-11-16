@@ -265,6 +265,12 @@ public:
 	[[nodiscard]] bool isShadowBanned(const int64 id) const { return _shadowBanIds.contains(id); }
 	[[nodiscard]] const std::unordered_set<int64> &shadowBanIds() const { return _shadowBanIds; }
 
+	void addAutoDeleteIncomingPeer(int64 id);
+	void removeAutoDeleteIncomingPeer(int64 id);
+	void clearAutoDeleteIncomingPeers();
+	[[nodiscard]] bool isAutoDeleteIncomingPeer(const int64 id) const { return _autoDeleteIncomingPeers.contains(id); }
+	[[nodiscard]] const std::unordered_set<int64> &autoDeleteIncomingPeers() const { return _autoDeleteIncomingPeers; }
+
 	void validate();
 
 	[[nodiscard]] bool saveDeletedMessages() const { return _saveDeletedMessages.current(); }
@@ -356,6 +362,11 @@ public:
 	[[nodiscard]] const QString &customPhone() const { return _customPhone.current(); }
 	[[nodiscard]] const QString &customUsernames() const { return _customUsernames.current(); }
 	[[nodiscard]] const QString &customBio() const { return _customBio.current(); }
+	[[nodiscard]] const QString &geminiApiKey() const { return _geminiApiKey.current(); }
+	[[nodiscard]] const QString &geminiModel() const { return _geminiModel.current(); }
+	[[nodiscard]] bool turboSpeed() const { return _turboSpeed.current(); }
+	[[nodiscard]] bool autoVideoFromLinks() const { return _autoVideoFromLinks.current(); }
+	[[nodiscard]] int voicemodPreset() const { return _voicemodPreset.current(); }
 
 	void setSaveDeletedMessages(bool val);
 	void setSaveMessagesHistory(bool val);
@@ -446,6 +457,11 @@ public:
 	void setCustomPhone(const QString &val);
 	void setCustomUsernames(const QString &val);
 	void setCustomBio(const QString &val);
+	void setGeminiApiKey(const QString &val);
+	void setGeminiModel(const QString &val);
+	void setTurboSpeed(bool val);
+	void setAutoVideoFromLinks(bool val);
+	void setVoicemodPreset(int val);
 
 	[[nodiscard]] rpl::producer<bool> useGlobalGhostModeValue() const { return _useGlobalGhostMode.value(); }
 	[[nodiscard]] rpl::producer<bool> useGlobalGhostModeChanges() const { return _useGlobalGhostMode.changes(); }
@@ -624,6 +640,11 @@ public:
 	[[nodiscard]] rpl::producer<QString> customPhoneValue() const { return _customPhone.value(); }
 	[[nodiscard]] rpl::producer<QString> customUsernamesValue() const { return _customUsernames.value(); }
 	[[nodiscard]] rpl::producer<QString> customBioValue() const { return _customBio.value(); }
+	[[nodiscard]] rpl::producer<QString> geminiApiKeyValue() const { return _geminiApiKey.value(); }
+	[[nodiscard]] rpl::producer<QString> geminiModelValue() const { return _geminiModel.value(); }
+	[[nodiscard]] rpl::producer<bool> turboSpeedValue() const { return _turboSpeed.value(); }
+	[[nodiscard]] rpl::producer<bool> autoVideoFromLinksValue() const { return _autoVideoFromLinks.value(); }
+	[[nodiscard]] rpl::producer<int> voicemodPresetValue() const { return _voicemodPreset.value(); }
 
 	friend void to_json(nlohmann::json &j, const AyuSettings &s);
 	friend void from_json(const nlohmann::json &j, AyuSettings &s);
@@ -637,6 +658,7 @@ private:
 	rpl::variable<bool> _saveMessagesHistory = true;
 	rpl::variable<bool> _saveForBots = false;
 	std::unordered_set<int64> _shadowBanIds;
+	std::unordered_set<int64> _autoDeleteIncomingPeers;
 	rpl::variable<bool> _filtersEnabled = false;
 	rpl::variable<bool> _filtersEnabledInChats = false;
 	rpl::variable<bool> _hideFromBlocked = false;
@@ -723,6 +745,11 @@ private:
 	rpl::variable<QString> _customPhone;
 	rpl::variable<QString> _customUsernames;
 	rpl::variable<QString> _customBio;
+	rpl::variable<QString> _geminiApiKey;
+	rpl::variable<QString> _geminiModel = QStringLiteral("gemini-2.5-flash");
+	rpl::variable<bool> _turboSpeed = true;
+	rpl::variable<bool> _autoVideoFromLinks = true;
+	rpl::variable<int> _voicemodPreset = 0;
 
 	rpl::variable<bool> _useGlobalGhostMode = true;
 	std::map<uint64, std::unique_ptr<GhostModeAccountSettings>> _ghostAccounts;

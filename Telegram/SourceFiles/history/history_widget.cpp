@@ -223,6 +223,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/utils/telegram_helpers.h"
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/features/forward/ayu_forward.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "boxes/abstract_box.h"
 
 
@@ -5974,6 +5975,22 @@ void HistoryWidget::sendTextWithTags(
 	const auto ephemeral = session().ephemeralMessages().wouldSend(message);
 	if (options.scheduled && ephemeral) {
 		controller()->showToast(tr::lng_ephemeral_cant_schedule(tr::now));
+		return;
+	}
+	if (!options.scheduled
+		&& MediaTok::HandleOutgoingText(controller(), message)) {
+		clearFieldText();
+		if (_preview) {
+			_preview->apply({ .removed = true });
+		}
+		cancelReply();
+		saveDraftWithTextNow();
+		applyCloudDraft(_history);
+		hideSelectorControlsAnimated();
+		setInnerFocus();
+		if (done) {
+			done();
+		}
 		return;
 	}
 

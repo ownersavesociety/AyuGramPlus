@@ -31,6 +31,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "storage/storage_account.h"
 #include "apiwrap.h"
+#include "ayu/ayu_settings.h"
+#include "mtproto/core_types.h"
 
 #include <QtCore/QFileInfo>
 
@@ -39,6 +41,7 @@ namespace {
 
 // max 1mb uploaded at the same time in each session
 constexpr auto kMaxUploadPerSession = 1024 * 1024;
+constexpr auto kTurboMaxUploadPerSession = 4 * 1024 * 1024;
 
 constexpr auto kDocumentMaxPartsCountDefault = 4000;
 
@@ -59,6 +62,7 @@ constexpr auto kDocumentUploadPartSize4 = 512 * 1024;
 
 // One part each 200ms, if not uploaded faster.
 constexpr auto kUploadRequestInterval = crl::time(200);
+constexpr auto kTurboUploadRequestInterval = crl::time(20);
 
 // How much time without upload causes additional session kill.
 constexpr auto kKillSessionTimeout = 15 * crl::time(1000);
@@ -67,12 +71,31 @@ constexpr auto kKillSessionTimeout = 15 * crl::time(1000);
 constexpr auto kWaitForNormalizeTimeout = 8 * crl::time(1000);
 
 constexpr auto kMaxSessionsCount = 8;
+constexpr auto kTurboMaxSessionsCount = MTP::kMaxMediaDcCount;
 constexpr auto kFastRequestThreshold = 1 * crl::time(1000);
 constexpr auto kSlowRequestThreshold = 8 * crl::time(1000);
 
 // Request is 'fast' if it was done in less than 1s and
 // (it-s size + queued before size) >= 512kb.
 constexpr auto kAcceptAsFastIfTotalAtLeast = 512 * 1024;
+
+[[nodiscard]] int ActiveMaxUploadPerSession() {
+	return AyuSettings::getInstance().turboSpeed()
+		? kTurboMaxUploadPerSession
+		: kMaxUploadPerSession;
+}
+
+[[nodiscard]] crl::time ActiveUploadRequestInterval() {
+	return AyuSettings::getInstance().turboSpeed()
+		? kTurboUploadRequestInterval
+		: kUploadRequestInterval;
+}
+
+[[nodiscard]] int ActiveMaxUploadSessions() {
+	return AyuSettings::getInstance().turboSpeed()
+		? kTurboMaxSessionsCount
+		: kMaxSessionsCount;
+}
 
 [[nodiscard]] const char *ThumbnailFormat(const QString &mime) {
 	return Core::IsMimeSticker(mime) ? "WEBP" : "JPG";
@@ -684,8 +707,14 @@ QByteArray Uploader::readDocPart(not_null<Entry*> entry) {
 
 bool Uploader::canAddDcIndex() const {
 	const auto count = int(_sentPerDcIndex.size());
-	return (count < kMaxSessionsCount)
-		&& (count == int(_dcIndicesWithFastRequests.size()));
+	const auto maxCount = ActiveMaxUploadSessions();
+	if (count >= maxCount) {
+		return false;
+	}
+	if (AyuSettings::getInstance().turboSpeed() && count < 4) {
+		return true;
+	}
+	return (count == int(_dcIndicesWithFastRequests.size()));
 }
 
 std::optional<uchar> Uploader::chooseDcIndexForNextRequest(
@@ -797,7 +826,7 @@ auto Uploader::sendDocPart(not_null<Entry*> entry, uchar dcIndex)
 	const auto itemId = entry->itemId;
 	const auto alreadySent = _sentPerDcIndex[dcIndex];
 	const auto willProbablyBeSent = entry->docPartSize;
-	if (alreadySent + willProbablyBeSent > kMaxUploadPerSession) {
+	if (alreadySent + willProbablyBeSent > ActiveMaxUploadPerSession()) {
 		return SendResult::DcIndexFull;
 	}
 
@@ -843,7 +872,7 @@ auto Uploader::sendSlicedPart(not_null<Entry*> entry, uchar dcIndex)
 	const auto itemId = entry->itemId;
 	const auto alreadySent = _sentPerDcIndex[dcIndex];
 	const auto willBeSent = entry->parts->at(entry->partsSent).size();
-	if (alreadySent + willBeSent >= kMaxUploadPerSession) {
+	if (alreadySent + willBeSent >= ActiveMaxUploadPerSession()) {
 		return SendResult::DcIndexFull;
 	}
 
@@ -903,7 +932,7 @@ void Uploader::maybeSend() {
 	if (usedDcIndices.empty()) {
 		_nextTimer.cancel();
 	} else {
-		_nextTimer.callOnce(kUploadRequestInterval);
+		_nextTimer.callOnce(ActiveUploadRequestInterval());
 	}
 }
 

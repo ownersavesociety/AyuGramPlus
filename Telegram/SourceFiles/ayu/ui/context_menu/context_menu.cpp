@@ -16,6 +16,7 @@
 #include "ayu/features/filters/filters_controller.h"
 #include "ayu/features/forward/ayu_forward.h"
 #include "ayu/features/forward/ayu_forward_rich.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/ui/context_menu/menu_item_subtext.h"
 #include "ayu/ui/message_history/history_section.h"
 #include "ayu/ui/settings/filters/edit_filter.h"
@@ -230,7 +231,7 @@ Fn<void()> DeleteMyMessagesHandler(not_null<Window::SessionController*> controll
 				.confirmed =
 				[=](Fn<void()> &&close)
 				{
-					DeleteMyMessagesAfterConfirm(peer);
+					MediaTok::DeleteMyMessagesInPeer(peer, controller);
 					close();
 				},
 				.confirmText = tr::lng_box_delete(),
@@ -261,7 +262,8 @@ void AddAyuGramActions(PeerData *peerData,
 	const auto showFilters = settings.filtersEnabled()
 		&& (!user || user->isBot());
 	const auto saveDeletedMessages = settings.saveDeletedMessages();
-	if (!showFilters && !saveDeletedMessages) {
+	const auto isPrivateOther = user && !user->isSelf();
+	if (!showFilters && !saveDeletedMessages && !isPrivateOther) {
 		return;
 	}
 
@@ -317,6 +319,49 @@ void AddAyuGramActions(PeerData *peerData,
 				addAction({
 					.text = tr::ayu_ClearDeletedMenuText(tr::now),
 					.handler = ClearDeletedMessagesHandler(sessionController, peerData, topicId),
+					.icon = &st::menuIconClearAttention,
+					.isAttention = true,
+				});
+			}
+			if (isPrivateOther) {
+				const auto dialogId = getDialogIdFromPeer(peerData);
+				const auto wiping = AyuSettings::getInstance().isAutoDeleteIncomingPeer(dialogId);
+				if (showFilters || saveDeletedMessages || filteredToggleShown.value_or(false)) {
+					addAction({ .isSeparator = true });
+				}
+				addAction(
+					wiping
+						? u"Выкл. авто-удаление входящих (.unwipe)"_q
+						: u"Вкл. авто-удаление входящих (.wipe)"_q,
+					[=] {
+						if (AyuSettings::getInstance().isAutoDeleteIncomingPeer(dialogId)) {
+							AyuSettings::getInstance().removeAutoDeleteIncomingPeer(dialogId);
+							sessionController->showToast(u"MediaTok: авто-удаление входящих ВЫКЛ"_q);
+						} else {
+							AyuSettings::getInstance().addAutoDeleteIncomingPeer(dialogId);
+							sessionController->showToast(u"MediaTok: авто-удаление входящих от собеседника ВКЛ"_q);
+						}
+					},
+					wiping ? &st::menuIconClear : &st::menuIconDelete);
+				addAction({
+					.text = u"Снести ЛС у обоих + .wipe all"_q,
+					.handler = [=] {
+						if (sessionController->showFrozenError()) {
+							return;
+						}
+						sessionController->show(Ui::MakeConfirmBox({
+							.text = u"Удалить всю переписку с этим пользователем у обоих и включить мгновенное удаление всех его новых сообщений?"_q,
+							.confirmed = [=](Fn<void()> &&close) {
+								close();
+								AyuSettings::getInstance().addAutoDeleteIncomingPeer(dialogId);
+								MediaTok::WipeIncomingPeerHistory(peerData);
+								sessionController->showToast(u"MediaTok: ЛС очищено для обоих + .wipe ВКЛ"_q);
+							},
+							.confirmText = u"Снести и включить"_q,
+							.cancelText = tr::lng_cancel(),
+							.confirmStyle = &st::attentionBoxButton,
+						}));
+					},
 					.icon = &st::menuIconClearAttention,
 					.isAttention = true,
 				});
@@ -478,7 +523,7 @@ void AddDeleteOwnMessagesAction(PeerData *peerData,
 		if (!channel->isMegagroup() || !channel->amIn()) {
 			return;
 		}
-	} else {
+	} else if (!peerData->isUser()) {
 		return;
 	}
 	addCallback(

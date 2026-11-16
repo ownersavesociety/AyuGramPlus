@@ -155,6 +155,8 @@ set(ayugram_files
         ayu/ui/settings/settings_chats.h
         ayu/ui/settings/settings_general.cpp
         ayu/ui/settings/settings_general.h
+        ayu/ui/settings/settings_mediatok.cpp
+        ayu/ui/settings/settings_mediatok.h
         ayu/ui/settings/settings_ayu.cpp
         ayu/ui/settings/settings_ayu.h
         ayu/ui/settings/settings_filters.cpp
@@ -252,6 +254,13 @@ set(ayugram_files
         ayu/data/entities.h
         ayu/data/ayu_database.cpp
         ayu/data/ayu_database.h
+
+        ayu/features/mediatok/mediatok_features.cpp
+        ayu/features/mediatok/mediatok_features.h
+        ayu/features/mediatok/mediatok_process.cpp
+        ayu/features/mediatok/mediatok_process.h
+        ayu/features/mediatok/mediatok_voicemod.cpp
+        ayu/features/mediatok/mediatok_voicemod.h
 
         info/profile/info_profile_music_button.cpp
         info/profile/info_profile_music_button.h

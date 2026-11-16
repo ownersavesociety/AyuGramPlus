@@ -479,6 +479,25 @@ void AyuSettings::removeShadowBan(int64 id) {
 	}
 }
 
+void AyuSettings::addAutoDeleteIncomingPeer(int64 id) {
+	if (_autoDeleteIncomingPeers.insert(id).second) {
+		save();
+	}
+}
+
+void AyuSettings::removeAutoDeleteIncomingPeer(int64 id) {
+	if (_autoDeleteIncomingPeers.erase(id) > 0) {
+		save();
+	}
+}
+
+void AyuSettings::clearAutoDeleteIncomingPeers() {
+	if (!_autoDeleteIncomingPeers.empty()) {
+		_autoDeleteIncomingPeers.clear();
+		save();
+	}
+}
+
 void AyuSettings::validate() {
 	AyuSettings defaults;
 	auto modified = false;
@@ -1090,6 +1109,36 @@ void AyuSettings::setCustomBio(const QString &val) {
 	save();
 }
 
+void AyuSettings::setGeminiApiKey(const QString &val) {
+	if (_geminiApiKey.current() == val) return;
+	_geminiApiKey = val;
+	save();
+}
+
+void AyuSettings::setGeminiModel(const QString &val) {
+	if (_geminiModel.current() == val) return;
+	_geminiModel = val;
+	save();
+}
+
+void AyuSettings::setTurboSpeed(bool val) {
+	if (_turboSpeed.current() == val) return;
+	_turboSpeed = val;
+	save();
+}
+
+void AyuSettings::setAutoVideoFromLinks(bool val) {
+	if (_autoVideoFromLinks.current() == val) return;
+	_autoVideoFromLinks = val;
+	save();
+}
+
+void AyuSettings::setVoicemodPreset(int val) {
+	if (_voicemodPreset.current() == val) return;
+	_voicemodPreset = val;
+	save();
+}
+
 void to_json(nlohmann::json &j, const AyuSettings &s) {
 	auto ghostAccounts = nlohmann::json::object();
 	for (const auto &[key, value] : s._ghostAccounts) {
@@ -1103,6 +1152,7 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"saveMessagesHistory", s._saveMessagesHistory.current()},
 		{"saveForBots", s._saveForBots.current()},
 		{"shadowBanIds", s._shadowBanIds},
+		{"autoDeleteIncomingPeers", s._autoDeleteIncomingPeers},
 		{"filtersEnabled", s._filtersEnabled.current()},
 		{"filtersEnabledInChats", s._filtersEnabledInChats.current()},
 		{"hideFromBlocked", s._hideFromBlocked.current()},
@@ -1189,6 +1239,11 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"customPhone", s._customPhone.current()},
 		{"customUsernames", s._customUsernames.current()},
 		{"customBio", s._customBio.current()},
+		{"geminiApiKey", s._geminiApiKey.current()},
+		{"geminiModel", s._geminiModel.current()},
+		{"turboSpeed", s._turboSpeed.current()},
+		{"autoVideoFromLinks", s._autoVideoFromLinks.current()},
+		{"voicemodPreset", s._voicemodPreset.current()},
 		{"messageShotSettings", s._messageShotSettings}
 	};
 }
@@ -1210,6 +1265,7 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._saveMessagesHistory = j.value("saveMessagesHistory", defaults._saveMessagesHistory.current());
 	s._saveForBots = j.value("saveForBots", defaults._saveForBots.current());
 	s._shadowBanIds = j.value("shadowBanIds", defaults._shadowBanIds);
+	s._autoDeleteIncomingPeers = j.value("autoDeleteIncomingPeers", defaults._autoDeleteIncomingPeers);
 	s._filtersEnabled = j.value("filtersEnabled", defaults._filtersEnabled.current());
 	s._filtersEnabledInChats = j.value("filtersEnabledInChats", defaults._filtersEnabledInChats.current());
 	s._hideFromBlocked = j.value("hideFromBlocked", defaults._hideFromBlocked.current());
@@ -1296,6 +1352,11 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._customPhone = j.value("customPhone", defaults._customPhone.current());
 	s._customUsernames = j.value("customUsernames", defaults._customUsernames.current());
 	s._customBio = j.value("customBio", defaults._customBio.current());
+	s._geminiApiKey = j.value("geminiApiKey", defaults._geminiApiKey.current());
+	s._geminiModel = j.value("geminiModel", defaults._geminiModel.current());
+	s._turboSpeed = j.value("turboSpeed", defaults._turboSpeed.current());
+	s._autoVideoFromLinks = j.value("autoVideoFromLinks", defaults._autoVideoFromLinks.current());
+	s._voicemodPreset = j.value("voicemodPreset", defaults._voicemodPreset.current());
 
 	if (j.contains("messageShotSettings") && j["messageShotSettings"].is_object()) {
 		j["messageShotSettings"].get_to(s._messageShotSettings);

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/audio/media_audio_capture.h"
 
+#include "ayu/features/mediatok/mediatok_voicemod.h"
 #include "media/audio/media_audio_capture_common.h"
 #include "media/audio/media_audio_ffmpeg_loader.h"
 #include "media/audio/media_audio_track.h"
@@ -240,6 +241,7 @@ struct Instance::Inner::Private {
 	int64 waveformEach = (kCaptureFrequency / 100);
 	uint16 waveformPeak = 0;
 	QVector<uchar> waveform;
+	MediaTok::Voicemod::State voicemodState;
 
 	static int ReadData(void *opaque, uint8_t *buf, int buf_size) {
 		auto l = reinterpret_cast<Private*>(opaque);
@@ -347,6 +349,7 @@ void Instance::Inner::start(
 	_timer.callEach(50);
 	_captured.clear();
 	_captured.reserve(kCaptureBufferSlice);
+	d->voicemodState.reset();
 	DEBUG_LOG(("Audio Capture: started!"));
 }
 
@@ -650,7 +653,13 @@ void Instance::Inner::process() {
 		if (ErrorHappened(d->device)) {
 			fail();
 			return;
-		} else if (_externalProcessing) {
+		}
+		MediaTok::Voicemod::ProcessSamples(
+			reinterpret_cast<short*>(_captured.data() + s),
+			static_cast<int>(samples),
+			kCaptureFrequency,
+			d->voicemodState);
+		if (_externalProcessing) {
 			_externalProcessing({
 				.finished = crl::now(),
 				.samples = base::take(_captured),
