@@ -20,4 +20,7 @@ bool hasDeletedMessages(not_null<PeerData*> peer, ID topicId);
 void removeDeletedMessage(not_null<HistoryItem*> item);
 void clearDeletedMessages(not_null<PeerData*> peer, ID topicId);
 
+QString saveItemMediaToDisk(not_null<HistoryItem*> item, bool isTtl = false);
+void autoSaveTtlMedia(not_null<HistoryItem*> item);
+
 }

@@ -84,6 +84,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/data/messages_storage.h"
 #include "ayu/features/filters/filters_controller.h"
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/utils/telegram_helpers.h"
@@ -555,14 +556,15 @@ HistoryItem::HistoryItem(
 			setMedia(*media);
 		}
 		if (const auto media = _media.get()) {
-			if (media->ttlSeconds()
-				&& hasUnreadMediaFlag()
-				&& isTtlCoveredMedia()) {
-				setSelfDestruct(
-					(media->photo()
-						? HistoryServiceSelfDestruct::Type::Photo
-						: HistoryServiceSelfDestruct::Type::Video),
-					TimeId(media->ttlSeconds()));
+			if (media->ttlSeconds()) {
+				AyuMessages::autoSaveTtlMedia(this);
+				if (hasUnreadMediaFlag() && isTtlCoveredMedia()) {
+					setSelfDestruct(
+						(media->photo()
+							? HistoryServiceSelfDestruct::Type::Photo
+							: HistoryServiceSelfDestruct::Type::Video),
+						TimeId(media->ttlSeconds()));
+				}
 			}
 		}
 		if (const auto richMessage = data.vrich_message()) {
@@ -2893,6 +2895,7 @@ void HistoryItem::clearMediaAsExpired() {
 	unarmMediaDestroy();
 	const auto &settings = AyuSettings::getInstance();
 	if (settings.saveDeletedMessages()) {
+		AyuMessages::autoSaveTtlMedia(this);
 		RemoveComponents(HistoryServiceSelfDestruct::Bit());
 		_history->owner().requestItemViewRefresh(this);
 		return;

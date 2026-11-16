@@ -25,6 +25,7 @@
 #include "base/call_delayed.h"
 #include "base/random.h"
 #include "base/unixtime.h"
+#include "core/file_utilities.h"
 #include "core/mime_type.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
@@ -950,8 +951,22 @@ void AddReadUntilAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 }
 
 void AddBurnAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
-	if (!item->media() || item->media()->ttlSeconds() <= 0 || item->out() ||
-		!item->hasUnreadMediaFlag()) {
+	if (!item || !item->media() || item->media()->ttlSeconds() <= 0) {
+		return;
+	}
+
+	menu->addAction(
+		u"Сохранить сгорающее медиа (TTL)"_q,
+		[=]
+		{
+			const auto savedPath = AyuMessages::saveItemMediaToDisk(item, true);
+			if (!savedPath.isEmpty()) {
+				File::ShowInFolder(savedPath);
+			}
+		},
+		&st::menuIconDownload);
+
+	if (item->out() || !item->hasUnreadMediaFlag()) {
 		return;
 	}
 

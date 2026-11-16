@@ -6,18 +6,192 @@
 // Copyright @Radolyn, 2026
 #include "ayu/data/messages_storage.h"
 
+#include "ayu/ayu_settings.h"
 #include "ayu/data/ayu_database.h"
 #include "ayu/utils/ayu_mapper.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/unixtime.h"
+#include "data/data_document.h"
+#include "data/data_document_media.h"
+#include "data/data_file_origin.h"
 #include "data/data_forum_topic.h"
+#include "data/data_media_types.h"
+#include "data/data_photo.h"
+#include "data/data_photo_media.h"
 #include "data/data_session.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_components.h"
 #include "main/main_session.h"
+#include "ui/image/image.h"
+
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 
 namespace AyuMessages {
+
+namespace {
+
+QString resolveMediaExtension(DocumentData *document) {
+	if (!document) {
+		return u".jpg"_q;
+	}
+	const auto filename = document->filename();
+	if (!filename.isEmpty()) {
+		const auto suffix = QFileInfo(filename).suffix();
+		if (!suffix.isEmpty()) {
+			return u"."_q + suffix;
+		}
+	}
+	if (document->isVoiceMessage()) {
+		return u".ogg"_q;
+	} else if (document->isVideoMessage() || document->isVideoFile() || document->isAnimation()) {
+		return u".mp4"_q;
+	} else if (document->isAudioFile() || document->isSong()) {
+		return u".mp3"_q;
+	}
+	return u".bin"_q;
+}
+
+QString buildSavedMediaPath(not_null<HistoryItem*> item, bool isTtl) {
+	const auto dialogId = getDialogIdFromPeer(item->history()->peer);
+	const auto folder = isTtl
+		? u"./tdata/AyuGramPlus_SavedMedia/ttl/chat_%1"_q.arg(dialogId)
+		: u"./tdata/AyuGramPlus_SavedMedia/deleted/chat_%1"_q.arg(dialogId);
+	QDir().mkpath(folder);
+
+	const auto media = item->media();
+	const auto ext = (media && media->document())
+		? resolveMediaExtension(media->document())
+		: u".jpg"_q;
+
+	const auto fileName = u"msg_%1_%2%3"_q
+		.arg(item->id.bare)
+		.arg(item->date())
+		.arg(ext);
+	return QDir(folder).filePath(fileName);
+}
+
+} // namespace
+
+QString saveItemMediaToDisk(not_null<HistoryItem*> item, bool isTtl) {
+	const auto media = item->media();
+	if (!media) {
+		return QString();
+	}
+
+	const auto hasTtl = (media->ttlSeconds() > 0);
+	const auto targetPath = buildSavedMediaPath(item, isTtl || hasTtl);
+	const auto absPath = QFileInfo(targetPath).absoluteFilePath();
+	if (QFileInfo::exists(absPath) && QFileInfo(absPath).size() > 0) {
+		return absPath;
+	}
+
+	const auto origin = Data::FileOrigin(item->fullId());
+
+	if (const auto photo = media->photo()) {
+		auto photoMedia = photo->activeMediaView()
+			? photo->activeMediaView()
+			: photo->createMediaView();
+		if (photoMedia->saveToFile(absPath)) {
+			return absPath;
+		}
+		if (const auto smallImg = photoMedia->image(Data::PhotoSize::Small)) {
+			if (!smallImg->original().isNull() && !isTtl) {
+				if (smallImg->original().save(absPath, "JPG")) {
+					return absPath;
+				}
+			}
+		}
+		if (const auto thumbImg = photoMedia->image(Data::PhotoSize::Thumbnail)) {
+			if (!thumbImg->original().isNull() && !isTtl) {
+				if (thumbImg->original().save(absPath, "JPG")) {
+					return absPath;
+				}
+			}
+		}
+		photo->load(Data::PhotoSize::Large, origin, LoadFromCloudOrLocal, true);
+		if (photo->hasVideo()) {
+			photo->loadVideo(Data::PhotoSize::Large, origin);
+		}
+		auto lifetime = std::make_shared<rpl::lifetime>();
+		photo->session().downloaderTaskFinished(
+		) | rpl::on_next([=]() mutable {
+			if (photoMedia->loaded()) {
+				photoMedia->saveToFile(absPath);
+				if (lifetime) {
+					base::take(lifetime)->destroy();
+				}
+			} else if (photo->failed(Data::PhotoSize::Large) || photo->cancelled()) {
+				if (lifetime) {
+					base::take(lifetime)->destroy();
+				}
+			}
+		}, *lifetime);
+		return absPath;
+	}
+
+	if (const auto document = media->document()) {
+		const auto existingPath = document->filepath(true);
+		if (!existingPath.isEmpty() && QFileInfo::exists(existingPath)) {
+			QFile::remove(absPath);
+			if (QFile::copy(existingPath, absPath)) {
+				return absPath;
+			}
+		}
+		auto docMedia = document->activeMediaView()
+			? document->activeMediaView()
+			: document->createMediaView();
+		if (!docMedia->bytes().isEmpty()) {
+			QFile f(absPath);
+			if (f.open(QIODevice::WriteOnly)) {
+				f.write(docMedia->bytes());
+				f.close();
+				return absPath;
+			}
+		}
+		document->save(origin, absPath, LoadFromCloudOrLocal, true);
+		auto lifetime = std::make_shared<rpl::lifetime>();
+		document->session().downloaderTaskFinished(
+		) | rpl::on_next([=]() mutable {
+			if (QFileInfo::exists(absPath) && QFileInfo(absPath).size() > 0) {
+				if (lifetime) {
+					base::take(lifetime)->destroy();
+				}
+				return;
+			}
+			if (docMedia->loaded(true) && !docMedia->bytes().isEmpty()) {
+				QFile f(absPath);
+				if (f.open(QIODevice::WriteOnly)) {
+					f.write(docMedia->bytes());
+					f.close();
+				}
+				if (lifetime) {
+					base::take(lifetime)->destroy();
+				}
+			} else if (document->cancelled()) {
+				if (lifetime) {
+					base::take(lifetime)->destroy();
+				}
+			}
+		}, *lifetime);
+		return absPath;
+	}
+
+	return QString();
+}
+
+void autoSaveTtlMedia(not_null<HistoryItem*> item) {
+	if (!AyuSettings::getInstance().saveDeletedMessages()) {
+		return;
+	}
+	const auto media = item->media();
+	if (!media || media->ttlSeconds() <= 0) {
+		return;
+	}
+	saveItemMediaToDisk(item, true);
+}
 
 template<typename DerivedMessage>
 std::vector<AyuMessageBase> convertToBase(const std::vector<DerivedMessage> &messages) {
@@ -74,14 +248,22 @@ void map(not_null<HistoryItem*> item, AyuMessageBase &message) {
 	message.text = serializedText.first;
 	message.textEntities = serializedText.second;
 
-	// todo: implement mapping
-	message.mediaPath = "/";
-	// message.hqThumbPath
-	message.documentType = 0; // document type none
-	// message.documentSerialized
-	// message.thumbsSerialized
-	// message.documentAttributesSerialized
-	// message.mimeType
+	const auto savedPath = saveItemMediaToDisk(item, false);
+	if (!savedPath.isEmpty()) {
+		message.mediaPath = savedPath.toStdString();
+		if (const auto media = item->media()) {
+			if (const auto doc = media->document()) {
+				message.documentType = static_cast<int>(doc->type);
+				message.mimeType = doc->mimeString().toStdString();
+			} else if (media->photo()) {
+				message.documentType = 1;
+				message.mimeType = "image/jpeg";
+			}
+		}
+	} else {
+		message.mediaPath = "/";
+		message.documentType = 0;
+	}
 }
 
 void addEditedMessage(not_null<HistoryItem *> item) {
@@ -115,7 +297,7 @@ void addDeletedMessage(not_null<HistoryItem*> item) {
 	DeletedMessage message;
 	map(item, message);
 
-	if (message.text.empty()) {
+	if (message.text.empty() && (message.mediaPath.empty() || message.mediaPath == "/")) {
 		return;
 	}
 

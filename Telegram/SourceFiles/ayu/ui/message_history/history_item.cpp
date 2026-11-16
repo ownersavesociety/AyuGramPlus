@@ -118,6 +118,15 @@ void GenerateItems(
 	auto textAndEntities = Ui::Text::WithEntities(text);
 	const auto entities = AyuMapper::deserializeTextWithEntities(message.textEntities);
 	textAndEntities.entities = Api::EntitiesFromMTP(&history->session(), entities.v);
+	if (!message.mediaPath.empty() && message.mediaPath != "/") {
+		const auto mediaNote = u"[Сохранено медиа: %1]"_q.arg(
+			QString::fromStdString(message.mediaPath));
+		if (!textAndEntities.text.isEmpty()) {
+			textAndEntities.text += u"\n\n"_q + mediaNote;
+		} else {
+			textAndEntities.text = mediaNote;
+		}
+	}
 	addSimpleTextMessage(std::move(textAndEntities));
 }
 
