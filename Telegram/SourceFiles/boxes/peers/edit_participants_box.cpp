@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_participants_box.h"
 
 #include "api/api_chat_participants.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "boxes/peers/edit_participant_box.h"
 #include "boxes/peers/edit_tag_control.h"
 #include "boxes/peers/add_participants_box.h"
@@ -2058,6 +2059,25 @@ base::unique_qptr<Ui::PopupMenu> ParticipantsBoxController::rowContextMenu(
 			(participant->isUser()
 				? &st::menuIconProfile
 				: &st::menuIconInfo));
+		if (const auto controller = _navigation->parentController()) {
+			const auto searchKey = Dialogs::Key(_peer->owner().history(_peer));
+			if (MediaTok::CanSearchUserMessagesInChat(searchKey, participant)) {
+				const auto weak = base::make_weak(controller);
+				result->addAction(
+					participant->isSelf()
+						? u"Мои сообщения в группе"_q
+						: tr::lng_context_search_from(tr::now),
+					[=] {
+						if (const auto strong = weak.get()) {
+							MediaTok::SearchUserMessagesInChat(
+								strong,
+								searchKey,
+								participant);
+						}
+					},
+					&st::menuIconSearch);
+			}
+		}
 	}
 	if (user && SupportsMemberTags(_peer)) {
 		const auto isSelf = user->isSelf();

@@ -118,6 +118,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QClipboard>
 
 // AyuGram includes
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/ui/utils/ayu_profile_values.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "styles/style_ayu_styles.h"
@@ -3324,6 +3325,32 @@ void ActionsFiller::addJoinChannelAction(
 }
 
 void ActionsFiller::fillUserActions(not_null<UserData*> user) {
+	if (const auto controller = _controller->parentController()) {
+		const auto activeChat = controller->activeChatCurrent();
+		if (MediaTok::CanSearchUserMessagesInChat(activeChat, user)) {
+			const auto chatPeer = activeChat.peer();
+			if (user->isSelf()
+				|| (chatPeer && (chatPeer->isChat() || chatPeer->isMegagroup()))) {
+				const auto weak = base::make_weak(controller);
+				const auto title = user->isSelf()
+					? u"Мои сообщения в «%1»"_q.arg(chatPeer->name())
+					: u"Сообщения в «%1»"_q.arg(chatPeer->name());
+				AddActionButton(
+					_wrap,
+					rpl::single(title),
+					rpl::single(true),
+					[=] {
+						if (const auto strong = weak.get()) {
+							MediaTok::SearchUserMessagesInChat(
+								strong,
+								activeChat,
+								user);
+						}
+					},
+					&st::menuIconSearch);
+			}
+		}
+	}
 	if (user->isBot()) {
 		addAffiliateProgram(user);
 		addBalanceActions(user);

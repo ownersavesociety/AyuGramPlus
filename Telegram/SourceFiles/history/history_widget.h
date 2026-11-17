@@ -790,7 +790,7 @@ private:
 	bool kbWasHidden() const;
 	[[nodiscard]] bool forceReplyPending() const;
 
-	void switchToSearch(QString query);
+	void switchToSearch(QString query, PeerData *searchFrom = nullptr);
 
 	void validateSubsectionTabs();
 

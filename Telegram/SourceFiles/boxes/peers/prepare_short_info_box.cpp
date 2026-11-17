@@ -7,7 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/peers/prepare_short_info_box.h"
 
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "base/unixtime.h"
+#include "base/weak_ptr.h"
 #include "boxes/peers/peer_short_info_box.h"
 #include "core/application.h"
 #include "data/data_changes.h"
@@ -504,6 +506,23 @@ object_ptr<Ui::BoxContent> PrepareShortInfoBox(
 	auto menuFiller = [=](Ui::Menu::MenuCallback addAction) {
 		const auto peerSeparateId = Window::SeparateId(peer);
 		const auto window = show->resolveWindow();
+		if (window) {
+			const auto activeChat = window->activeChatCurrent();
+			if (MediaTok::CanSearchUserMessagesInChat(activeChat, peer)) {
+				const auto text = peer->isSelf()
+					? u"Мои сообщения в этом чате"_q
+					: tr::lng_context_search_from(tr::now);
+				const auto weak = base::make_weak(window);
+				addAction(text, [=] {
+					if (const auto strong = weak.get()) {
+						MediaTok::SearchUserMessagesInChat(
+							strong,
+							activeChat,
+							peer);
+					}
+				}, &st::menuIconSearch);
+			}
+		}
 		if (window && window->windowId() != peerSeparateId) {
 			addAction(tr::lng_context_new_window(tr::now), [=] {
 				Ui::PreventDelayedActivation();

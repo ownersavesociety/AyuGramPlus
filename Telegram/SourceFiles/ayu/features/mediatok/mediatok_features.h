@@ -2,6 +2,7 @@
 #pragma once
 
 #include "api/api_common.h"
+#include "dialogs/dialogs_key.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QString>
@@ -67,5 +68,14 @@ void DownloadVideoTools(
 
 [[nodiscard]] QString VoicemodPresetName(int preset);
 constexpr int kVoicemodPresetCount = 8;
+
+[[nodiscard]] bool CanSearchUserMessagesInChat(
+	const Dialogs::Key &chat,
+	not_null<PeerData*> targetUser);
+
+void SearchUserMessagesInChat(
+	not_null<Window::SessionController*> controller,
+	const Dialogs::Key &chat,
+	not_null<PeerData*> targetUser);
 
 } // namespace MediaTok

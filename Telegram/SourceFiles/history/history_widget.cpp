@@ -7119,16 +7119,18 @@ bool HistoryWidget::searchInChatEmbedded(
 	}
 	if (_peer != peer) {
 		return false;
-	} else if (_composeSearch) {
+	} else if (_composeSearch && !searchFrom) {
 		_composeSearch->setQuery(query);
 		_composeSearch->setInnerFocus();
 		return true;
+	} else if (_composeSearch) {
+		_composeSearch = nullptr;
 	}
-	switchToSearch(query);
+	switchToSearch(query, searchFrom);
 	return true;
 }
 
-void HistoryWidget::switchToSearch(QString query) {
+void HistoryWidget::switchToSearch(QString query, PeerData *searchFrom) {
 	const auto search = crl::guard(_list, [=] {
 		if (!_peer) {
 			return;
@@ -7140,12 +7142,11 @@ void HistoryWidget::switchToSearch(QString query) {
 
 			updateControlsGeometry();
 		};
-		const auto from = (PeerData*)nullptr;
 		_composeSearch = std::make_unique<HistoryView::ComposeSearch>(
 			this,
 			controller(),
 			_history,
-			from,
+			searchFrom,
 			query);
 
 		update();

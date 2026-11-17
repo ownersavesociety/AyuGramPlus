@@ -111,6 +111,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QGuiApplication>
 
 // AyuGram includes
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/ui/ayu_userpic.h"
 #include "ayu/utils/telegram_helpers.h"
 
@@ -1034,6 +1035,28 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 		message->setAccessibleName(tr::lng_profile_action_short_message(tr::now));
 		buttons.push_back(message);
 		_actions->add(message);
+
+		if (user->isSelf()) {
+			const auto activeChat = controller->activeChatCurrent();
+			if (MediaTok::CanSearchUserMessagesInChat(activeChat, user)) {
+				const auto myMessages = Ui::CreateChild<TopBarActionButton>(
+					this,
+					u"Мои сообщения"_q,
+					st::infoProfileTopBarActionSearch);
+				const auto weak = base::make_weak(controller);
+				myMessages->setClickedCallback([=] {
+					if (const auto strong = weak.get()) {
+						MediaTok::SearchUserMessagesInChat(
+							strong,
+							activeChat,
+							user);
+					}
+				});
+				myMessages->setAccessibleName(u"Мои сообщения"_q);
+				buttons.push_back(myMessages);
+				_actions->add(myMessages);
+			}
+		}
 	}
 	const auto canJoin = (!sublist && !topic && channel && !channel->amIn());
 	if (canJoin) {

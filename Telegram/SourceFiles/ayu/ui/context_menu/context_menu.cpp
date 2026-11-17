@@ -263,12 +263,21 @@ void AddAyuGramActions(PeerData *peerData,
 		&& (!user || user->isBot());
 	const auto saveDeletedMessages = settings.saveDeletedMessages();
 	const auto isPrivateOther = user && !user->isSelf();
-	if (!showFilters && !saveDeletedMessages && !isPrivateOther) {
-		return;
-	}
-
 	const auto topic = peerData->isForum() && thread ? thread->asTopic() : nullptr;
 	const auto topicId = topic ? topic->rootId().bare : 0;
+	const auto searchKey = topic
+		? Dialogs::Key(topic)
+		: Dialogs::Key(peerData->owner().history(peerData));
+	const auto selfUser = sessionController->session().user();
+	const auto canSearchMyMessages = MediaTok::CanSearchUserMessagesInChat(
+		searchKey,
+		selfUser);
+	if (!showFilters
+		&& !saveDeletedMessages
+		&& !isPrivateOther
+		&& !canSearchMyMessages) {
+		return;
+	}
 
 	addCallback(Window::PeerMenuCallback::Args{
 		.text = u"MediaTok"_q,
@@ -276,6 +285,18 @@ void AddAyuGramActions(PeerData *peerData,
 		.icon = &st::menuIconGroupReactions,
 		.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
 			const auto addAction = Ui::Menu::CreateAddActionCallback(menu);
+			if (canSearchMyMessages) {
+				addAction(
+					u"Мои сообщения в чате"_q,
+					[=]
+					{
+						MediaTok::SearchUserMessagesInChat(
+							sessionController,
+							searchKey,
+							selfUser);
+					},
+					&st::menuIconSearch);
+			}
 			if (showFilters) {
 				addAction(
 					tr::ayu_ViewFiltersMenuText(tr::now),
@@ -326,7 +347,7 @@ void AddAyuGramActions(PeerData *peerData,
 			if (isPrivateOther) {
 				const auto dialogId = getDialogIdFromPeer(peerData);
 				const auto wiping = AyuSettings::getInstance().isAutoDeleteIncomingPeer(dialogId);
-				if (showFilters || saveDeletedMessages || filteredToggleShown.value_or(false)) {
+				if (canSearchMyMessages || showFilters || saveDeletedMessages || filteredToggleShown.value_or(false)) {
 					addAction({ .isSeparator = true });
 				}
 				addAction(
@@ -589,30 +610,42 @@ void AddHideMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 
 void AddUserMessagesAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 	const auto &settings = AyuSettings::getInstance();
-	if (!needToShowItem(settings.showUserMessagesInContextMenu())) {
-		return;
-	}
-
 	if (!item->isHistoryEntry()) {
 		return;
 	}
 
-	if (item->history()->peer->isChat() || item->history()->peer->isMegagroup()) {
+	const auto from = item->from();
+	const auto targetFrom = from
+		? from
+		: (item->out() ? item->history()->session().user().get() : nullptr);
+	const auto isSelfAuthor = targetFrom && targetFrom->isSelf();
+	if (!isSelfAuthor && !needToShowItem(settings.showUserMessagesInContextMenu())) {
+		return;
+	}
+	if (!targetFrom) {
+		return;
+	}
+
+	const auto peer = item->history()->peer;
+	if (!peer->isSelf()
+		&& (peer->isChat() || peer->isMegagroup() || peer->isUser())) {
 		menu->addAction(
-			tr::ayu_UserMessagesMenuText(tr::now),
+			isSelfAuthor
+				? u"Мои сообщения в чате"_q
+				: tr::ayu_UserMessagesMenuText(tr::now),
 			[=]
 			{
 				if (const auto controller = item->history()->session().tryResolveWindow()) {
-					const auto peer = item->history()->peer;
-					const auto key = (peer && !peer->isUser())
+					const auto p = item->history()->peer;
+					const auto key = (p && !p->isUser())
 										 ? item->topic()
 											   ? Dialogs::Key{item->topic()}
 											   : Dialogs::Key{item->history()}
 										 : Dialogs::Key{item->history()};
-					controller->searchInChat(key, item->from());
+					controller->searchInChat(key, targetFrom);
 				}
 			},
-			&st::menuIconTTL);
+			&st::menuIconSearch);
 	}
 }
 

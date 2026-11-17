@@ -39,6 +39,7 @@
 #include "ui/image/image.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
+#include "window/window_adaptive.h"
 #include "window/window_session_controller.h"
 
 #include <QtCore/QBuffer>
@@ -969,6 +970,13 @@ void DeleteMyMessagesInPeer(
 	auto seenIds = std::make_shared<std::unordered_set<int64>>();
 	const auto removeNext = std::make_shared<Fn<void(int)>>();
 	const auto requestNext = std::make_shared<Fn<void(MsgId)>>();
+	const auto releaseLoop = [=] {
+		// Defer breaking the shared_ptr->Fn self-cycle until after the active lambda returns.
+		crl::on_main(session, [removeNext, requestNext] {
+			*removeNext = nullptr;
+			*requestNext = nullptr;
+		});
+	};
 
 	*removeNext = [=](int index) {
 		if (index >= int(collected->size())) {
@@ -983,8 +991,7 @@ void DeleteMyMessagesInPeer(
 			if (onDone) {
 				onDone(int(collected->size()));
 			}
-			*removeNext = nullptr;
-			*requestNext = nullptr;
+			releaseLoop();
 			return;
 		}
 
@@ -1031,8 +1038,7 @@ void DeleteMyMessagesInPeer(
 			if (onDone) {
 				onDone(index);
 			}
-			*removeNext = nullptr;
-			*requestNext = nullptr;
+			releaseLoop();
 		};
 
 		if (const auto channel = peer->asChannel()) {
@@ -1105,8 +1111,7 @@ void DeleteMyMessagesInPeer(
 			if (onDone) {
 				onDone(0);
 			}
-			*removeNext = nullptr;
-			*requestNext = nullptr;
+			releaseLoop();
 		};
 
 		if (peer->isUser()) {
@@ -1199,7 +1204,9 @@ void DeleteMyMessagesEverywhere(not_null<Window::SessionController*> controller)
 						s->showToast(
 							u"MediaTok: готово! Удалено %1 сообщений по всем чатам"_q.arg(*totalDeleted));
 					}
-					*stepFn = nullptr;
+					crl::on_main(session, [stepFn] {
+						*stepFn = nullptr;
+					});
 					return;
 				}
 				const auto peer = (*peers)[idx];
@@ -1484,6 +1491,39 @@ bool HandleOutgoingText(
 	}
 
 	return false;
+}
+
+bool CanSearchUserMessagesInChat(
+		const Dialogs::Key &chat,
+		not_null<PeerData*> targetUser) {
+	const auto chatPeer = chat.peer();
+	if (!chatPeer || chatPeer == targetUser || chatPeer->isSelf()) {
+		return false;
+	}
+	if (chatPeer->isUser() || chatPeer->isChat()) {
+		return true;
+	}
+	if (chatPeer->isMegagroup()) {
+		return !chatPeer->isForum() || (chat.topic() != nullptr);
+	}
+	return false;
+}
+
+void SearchUserMessagesInChat(
+		not_null<Window::SessionController*> controller,
+		const Dialogs::Key &chat,
+		not_null<PeerData*> targetUser) {
+	if (!CanSearchUserMessagesInChat(chat, targetUser)) {
+		return;
+	}
+	if (controller->adaptive().isOneColumn()) {
+		if (const auto thread = chat.thread()) {
+			controller->showThread(thread);
+		}
+	}
+	controller->hideLayer();
+	controller->hideSpecialLayer();
+	controller->searchInChat(chat, targetUser);
 }
 
 } // namespace MediaTok
