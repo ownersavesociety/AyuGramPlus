@@ -13,10 +13,12 @@ enum class Preset : int {
 	Robot = 3,
 	Radio = 4,
 	Echo = 5,
+	Whisper = 6,
+	StudioBass = 7,
 };
 
 struct State {
-	static constexpr int kPitchBufSize = 4096;
+	static constexpr int kPitchBufSize = 8192;
 	static constexpr int kPitchBufMask = kPitchBufSize - 1;
 	static constexpr int kEchoBufSize = 16384; // ~341ms @ 48kHz
 
@@ -28,6 +30,9 @@ struct State {
 	float hpPrevIn = 0.0f;
 	float hpPrevOut = 0.0f;
 	float lpPrevOut = 0.0f;
+	float dcPrevIn = 0.0f;
+	float dcPrevOut = 0.0f;
+	uint32_t noiseSeed = 0x1234567u;
 
 	std::array<float, kEchoBufSize> echoBuf{};
 	int echoPos = 0;
@@ -40,6 +45,9 @@ struct State {
 		hpPrevIn = 0.0f;
 		hpPrevOut = 0.0f;
 		lpPrevOut = 0.0f;
+		dcPrevIn = 0.0f;
+		dcPrevOut = 0.0f;
+		noiseSeed = 0x1234567u;
 		echoBuf.fill(0.0f);
 		echoPos = 0;
 	}

@@ -10,7 +10,7 @@ namespace MediaTok::Voicemod {
 namespace {
 
 constexpr double kTwoPi = 6.28318530717958647692;
-constexpr int kGrainSize = 2048;
+constexpr int kGrainSize = 3072;
 
 inline float ReadLinear(const std::array<float, State::kPitchBufSize> &buf, double pos) {
 	while (pos < 0.0) {
@@ -37,7 +37,7 @@ inline float ProcessPitchShift(float in, double ratio, State &s) {
 	const float s1 = ReadLinear(s.pitchBuf, static_cast<double>(s.pitchWritePos) - d1);
 	const float s2 = ReadLinear(s.pitchBuf, static_cast<double>(s.pitchWritePos) - d2);
 
-	const float w1 = static_cast<float>(1.0 - std::abs(2.0 * phase1 - 1.0));
+	const float w1 = 0.5f * (1.0f - static_cast<float>(std::cos(kTwoPi * phase1)));
 	const float w2 = 1.0f - w1;
 
 	s.pitchWritePos = (s.pitchWritePos + 1) & State::kPitchBufMask;
@@ -114,11 +114,32 @@ void ProcessSamples(short *samples, int count, int sampleRate, State &state) {
 			state.echoPos = (state.echoPos + 1) % State::kEchoBufSize;
 		} break;
 
+		case Preset::Whisper: {
+			const float shifted = ProcessPitchShift(in, 0.80, state);
+			const float hp = 0.96f * (state.hpPrevOut + shifted - state.hpPrevIn);
+			state.hpPrevIn = shifted;
+			state.hpPrevOut = hp;
+			state.noiseSeed = state.noiseSeed * 1664525u + 1013904223u;
+			const float white = (static_cast<float>((state.noiseSeed >> 16) & 0x7FFF) / 16384.0f) - 1.0f;
+			const float env = std::min(1.0f, std::abs(hp) * 6.0f);
+			out = hp * 0.85f + white * env * 0.14f;
+		} break;
+
+		case Preset::StudioBass: {
+			state.lpPrevOut = state.lpPrevOut + 0.045f * (in - state.lpPrevOut);
+			const float warmed = in * 0.78f + state.lpPrevOut * 0.65f;
+			out = std::tanh(warmed * 1.15f);
+		} break;
+
 		default:
 			break;
 		}
 
-		const float clamped = std::clamp(out, -0.999f, 0.999f);
+		const float dc = out - state.dcPrevIn + 0.995f * state.dcPrevOut;
+		state.dcPrevIn = out;
+		state.dcPrevOut = dc;
+
+		const float clamped = std::clamp(dc, -0.999f, 0.999f);
 		samples[i] = static_cast<short>(clamped * 32767.0f);
 	}
 }

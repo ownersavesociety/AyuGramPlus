@@ -1073,6 +1073,59 @@ void AddDeleteAllFromAuthorAction(
 	});
 }
 
+void AddAskGeminiAction(
+		not_null<Ui::PopupMenu*> menu,
+		not_null<Window::SessionController*> controller,
+		HistoryItem *item) {
+	if (!item || !item->isRegular() || item->isLocal()) {
+		return;
+	}
+	const bool hasText = !item->originalText().text.trimmed().isEmpty();
+	const bool hasPhoto = item->media() && item->media()->photo();
+	if (!hasText && !hasPhoto) {
+		return;
+	}
+	const auto weak = base::make_weak(controller);
+	const auto itemId = item->fullId();
+	const auto owner = &item->history()->owner();
+	menu->addAction(
+		u"Спросить Gemini (.ai)"_q,
+		[=] {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			if (const auto current = owner->message(itemId)) {
+				MediaTok::AskGeminiAboutItem(strong, current);
+			}
+		},
+		&st::menuIconInfo);
+}
+
+void AddResendAsCircleAction(
+		not_null<Ui::PopupMenu*> menu,
+		not_null<Window::SessionController*> controller,
+		HistoryItem *item) {
+	if (!MediaTok::CanResendAsCircle(item)) {
+		return;
+	}
+	const auto weak = base::make_weak(controller);
+	const auto itemId = item->fullId();
+	const auto owner = &item->history()->owner();
+	menu->addAction(
+		u"Отправить кружком"_q,
+		[=] {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			if (const auto current = owner->message(itemId)) {
+				MediaTok::ResendItemAsCircle(strong, current);
+			}
+		},
+		&st::menuIconTTLAny);
+}
+
 void AddCreateFilterAction(not_null<Ui::PopupMenu*> menu,
 						   not_null<Window::SessionController*> controller,
 						   HistoryItem *item,

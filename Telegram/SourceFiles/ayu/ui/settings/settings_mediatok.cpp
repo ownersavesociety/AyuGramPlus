@@ -118,14 +118,50 @@ void BuildGeminiSection(SectionBuilder &builder) {
 		},
 	});
 
+	builder.addButton({
+		.id = u"mediatok/geminiSystemPrompt"_q,
+		.title = rpl::single(u"Системный промпт Gemini (роль/стиль)"_q),
+		.icon = { &st::menuIconEdit },
+		.label = settings->geminiSystemPromptValue() | rpl::map([](const QString &p) {
+			const auto t = p.trimmed();
+			return t.isEmpty() ? u"По умолчанию"_q : (t.size() > 24 ? t.left(24) + u"..."_q : t);
+		}),
+		.onClick = [=] {
+			if (!controller) {
+				return;
+			}
+			controller->show(Box<EditMarkBox>(
+				rpl::single(u"Системный промпт для Gemini"_q),
+				AyuSettings::getInstance().geminiSystemPrompt(),
+				QString(),
+				[=](const QString &value) {
+					AyuSettings::getInstance().setGeminiSystemPrompt(value.trimmed());
+				}));
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/testGemini"_q,
+		.title = rpl::single(u"Проверить Gemini API Key"_q),
+		.icon = { &st::menuIconShowAll },
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::TestGeminiApi(controller);
+			}
+		},
+	});
+
 	builder.addSkip();
 	builder.addDividerText(rpl::single(
-		u"В любом чате: .ai <вопрос> (отправит ответ в чат, можно с реплаем) или .ai! <вопрос> (покажет ответ только вам)."_q));
+		u"В любом чате, теме и комментариях: .ai <вопрос> (понимает текст и фото в реплае) или .ai! <вопрос> (ответ только вам)."_q));
 	builder.addSkip();
 }
 
 void BuildMediaAndSpeedSection(SectionBuilder &builder, AyuSectionBuilder &ayu) {
-	builder.addSubsectionTitle(rpl::single(u"Скорость и видео по ссылкам"_q));
+	const auto controller = builder.controller();
+	const auto toolsRefresh = std::make_shared<rpl::event_stream<>>();
+
+	builder.addSubsectionTitle(rpl::single(u"Скорость, видео и кружки"_q));
 
 	ayu.addSettingToggle({
 		.id = u"mediatok/turboSpeed"_q,
@@ -143,9 +179,27 @@ void BuildMediaAndSpeedSection(SectionBuilder &builder, AyuSectionBuilder &ayu) 
 		.icon = { &st::menuIconLink },
 	});
 
+	builder.addButton({
+		.id = u"mediatok/downloadVideoTools"_q,
+		.title = rpl::single(u"Установить yt-dlp + ffmpeg (для 1080p и кружков)"_q),
+		.icon = { &st::menuIconRestore },
+		.label = toolsRefresh->events_starting_with({}) | rpl::map([] {
+			const auto yt = MediaTok::HasYtDlpTool() ? u"OK"_q : u"Нет"_q;
+			const auto ff = MediaTok::HasFfmpegTool() ? u"OK"_q : u"Нет"_q;
+			return u"yt-dlp: %1 | ffmpeg: %2"_q.arg(yt, ff);
+		}),
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::DownloadVideoTools(controller, [=] {
+					toolsRefresh->fire({});
+				});
+			}
+		},
+	});
+
 	builder.addSkip();
 	builder.addDividerText(rpl::single(
-		u"Turbo разгоняет параллельные MTProto-потоки до максимума (16 DC-сессий). Авто-видео качает ролик через yt-dlp вместо ссылки (для текста используйте .raw <ссылка>)."_q));
+		u"Turbo разгоняет параллельные MTProto-потоки до 16 DC-сессий. С ffmpeg видео качается в 1080p HD и работает .circle <ссылка> (видео -> кружок)."_q));
 	builder.addSkip();
 }
 
@@ -167,14 +221,14 @@ void BuildVoicemodSection(SectionBuilder &builder) {
 				return;
 			}
 			std::vector<QString> options;
-			options.reserve(6);
-			for (int i = 0; i < 6; ++i) {
+			options.reserve(MediaTok::kVoicemodPresetCount);
+			for (int i = 0; i < MediaTok::kVoicemodPresetCount; ++i) {
 				options.push_back(MediaTok::VoicemodPresetName(i));
 			}
 			const auto initial = std::clamp(
 				AyuSettings::getInstance().voicemodPreset(),
 				0,
-				5);
+				MediaTok::kVoicemodPresetCount - 1);
 			controller->show(Box([=](not_null<Ui::GenericBox*> box) {
 				SingleChoiceBox(box, {
 					.title = rpl::single(u"Эффект Voicemod"_q),
@@ -190,7 +244,7 @@ void BuildVoicemodSection(SectionBuilder &builder) {
 
 	builder.addSkip();
 	builder.addDividerText(rpl::single(
-		u"Обработка в реальном времени для ГС и видеосообщений (кружков). Быстрая смена в чате: .vm <off|deep|helium|robot|radio|echo>."_q));
+		u"Обработка в реальном времени (окно Ханна, без щелчков) для ГС и кружков. В чате: .vm <off|deep|helium|robot|radio|echo|anon|bass>."_q));
 	builder.addSkip();
 }
 
@@ -231,9 +285,11 @@ void BuildCleanupSection(SectionBuilder &builder) {
 	builder.addSkip();
 	builder.addDividerText(rpl::single(
 		u"Команды в чатах (.mt для справки):\n"
+		"• .ai <текст> / .ai! <текст> — Gemini ИИ (включая анализ фото в реплае)\n"
+		"• .circle <ссылка> — скачать видео по ссылке и отправить КРУЖКОМ (или реплаем .circle на видео/GIF)\n"
+		"• .dl <ссылка> / .raw <текст> — скачать видео / отправить текст без скачивания\n"
 		"• .delme / .delmeall — удалить ваши сообщения (в чате / во всех чатах)\n"
-		"• .wipe / .wipe all / .unwipe — мгновенно сносить входящие от собеседника в ЛС для обоих\n"
-		"• .dl <ссылка> — принудительно скачать и отправить видео вместо ссылки"_q));
+		"• .wipe / .wipe all / .unwipe — тихо сносить входящие от собеседника в ЛС для обоих"_q));
 	builder.addSkip();
 }
 

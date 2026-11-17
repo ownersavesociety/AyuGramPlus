@@ -52,6 +52,14 @@ void AddDeleteAllFromAuthorAction(
 	not_null<Ui::PopupMenu*> menu,
 	not_null<Window::SessionController*> controller,
 	HistoryItem *item);
+void AddAskGeminiAction(
+	not_null<Ui::PopupMenu*> menu,
+	not_null<Window::SessionController*> controller,
+	HistoryItem *item);
+void AddResendAsCircleAction(
+	not_null<Ui::PopupMenu*> menu,
+	not_null<Window::SessionController*> controller,
+	HistoryItem *item);
 void AddCreateFilterAction(not_null<Ui::PopupMenu*> menu,
 						   not_null<Window::SessionController*> controller,
 						   HistoryItem *item,

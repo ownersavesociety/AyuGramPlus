@@ -364,6 +364,7 @@ public:
 	[[nodiscard]] const QString &customBio() const { return _customBio.current(); }
 	[[nodiscard]] const QString &geminiApiKey() const { return _geminiApiKey.current(); }
 	[[nodiscard]] const QString &geminiModel() const { return _geminiModel.current(); }
+	[[nodiscard]] const QString &geminiSystemPrompt() const { return _geminiSystemPrompt.current(); }
 	[[nodiscard]] bool turboSpeed() const { return _turboSpeed.current(); }
 	[[nodiscard]] bool autoVideoFromLinks() const { return _autoVideoFromLinks.current(); }
 	[[nodiscard]] int voicemodPreset() const { return _voicemodPreset.current(); }
@@ -459,6 +460,7 @@ public:
 	void setCustomBio(const QString &val);
 	void setGeminiApiKey(const QString &val);
 	void setGeminiModel(const QString &val);
+	void setGeminiSystemPrompt(const QString &val);
 	void setTurboSpeed(bool val);
 	void setAutoVideoFromLinks(bool val);
 	void setVoicemodPreset(int val);
@@ -642,6 +644,7 @@ public:
 	[[nodiscard]] rpl::producer<QString> customBioValue() const { return _customBio.value(); }
 	[[nodiscard]] rpl::producer<QString> geminiApiKeyValue() const { return _geminiApiKey.value(); }
 	[[nodiscard]] rpl::producer<QString> geminiModelValue() const { return _geminiModel.value(); }
+	[[nodiscard]] rpl::producer<QString> geminiSystemPromptValue() const { return _geminiSystemPrompt.value(); }
 	[[nodiscard]] rpl::producer<bool> turboSpeedValue() const { return _turboSpeed.value(); }
 	[[nodiscard]] rpl::producer<bool> autoVideoFromLinksValue() const { return _autoVideoFromLinks.value(); }
 	[[nodiscard]] rpl::producer<int> voicemodPresetValue() const { return _voicemodPreset.value(); }
@@ -747,6 +750,7 @@ private:
 	rpl::variable<QString> _customBio;
 	rpl::variable<QString> _geminiApiKey;
 	rpl::variable<QString> _geminiModel = QStringLiteral("gemini-2.5-flash");
+	rpl::variable<QString> _geminiSystemPrompt;
 	rpl::variable<bool> _turboSpeed = true;
 	rpl::variable<bool> _autoVideoFromLinks = true;
 	rpl::variable<int> _voicemodPreset = 0;

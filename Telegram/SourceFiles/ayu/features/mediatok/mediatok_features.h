@@ -3,6 +3,8 @@
 
 #include "api/api_common.h"
 
+#include <QtCore/QByteArray>
+
 class HistoryItem;
 class PeerData;
 
@@ -19,7 +21,14 @@ namespace MediaTok {
 void AskGemini(
 	not_null<Main::Session*> session,
 	const QString &prompt,
-	Fn<void(QString answer, QString error)> callback);
+	Fn<void(QString answer, QString error)> callback,
+	const QByteArray &imageJpegBytes = {});
+
+void TestGeminiApi(not_null<Window::SessionController*> controller);
+
+void AskGeminiAboutItem(
+	not_null<Window::SessionController*> controller,
+	not_null<HistoryItem*> item);
 
 void DeleteMyMessagesInPeer(
 	not_null<PeerData*> peer,
@@ -37,6 +46,19 @@ void CheckAutoDeleteIncoming(not_null<HistoryItem*> item);
 	not_null<Window::SessionController*> controller,
 	const Api::MessageToSend &message);
 
+[[nodiscard]] bool CanResendAsCircle(HistoryItem *item);
+
+void ResendItemAsCircle(
+	not_null<Window::SessionController*> controller,
+	not_null<HistoryItem*> item);
+
+[[nodiscard]] bool HasYtDlpTool();
+[[nodiscard]] bool HasFfmpegTool();
+void DownloadVideoTools(
+	not_null<Window::SessionController*> controller,
+	Fn<void()> onUpdated = nullptr);
+
 [[nodiscard]] QString VoicemodPresetName(int preset);
+constexpr int kVoicemodPresetCount = 8;
 
 } // namespace MediaTok

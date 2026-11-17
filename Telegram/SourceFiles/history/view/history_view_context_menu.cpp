@@ -1447,6 +1447,10 @@ void AddMessageActions(
 	if (request.item) {
 		AyuUi::AddReadUntilAction(menu, request.item);
 		AyuUi::AddBurnAction(menu, request.item);
+		if (request.selectedItems.empty()) {
+			AyuUi::AddAskGeminiAction(menu, list->controller(), request.item);
+			AyuUi::AddResendAsCircleAction(menu, list->controller(), request.item);
+		}
 	}
 }
 

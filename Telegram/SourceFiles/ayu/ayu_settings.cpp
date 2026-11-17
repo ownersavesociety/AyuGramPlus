@@ -1121,6 +1121,12 @@ void AyuSettings::setGeminiModel(const QString &val) {
 	save();
 }
 
+void AyuSettings::setGeminiSystemPrompt(const QString &val) {
+	if (_geminiSystemPrompt.current() == val) return;
+	_geminiSystemPrompt = val;
+	save();
+}
+
 void AyuSettings::setTurboSpeed(bool val) {
 	if (_turboSpeed.current() == val) return;
 	_turboSpeed = val;
@@ -1241,6 +1247,7 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"customBio", s._customBio.current()},
 		{"geminiApiKey", s._geminiApiKey.current()},
 		{"geminiModel", s._geminiModel.current()},
+		{"geminiSystemPrompt", s._geminiSystemPrompt.current()},
 		{"turboSpeed", s._turboSpeed.current()},
 		{"autoVideoFromLinks", s._autoVideoFromLinks.current()},
 		{"voicemodPreset", s._voicemodPreset.current()},
@@ -1354,6 +1361,7 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._customBio = j.value("customBio", defaults._customBio.current());
 	s._geminiApiKey = j.value("geminiApiKey", defaults._geminiApiKey.current());
 	s._geminiModel = j.value("geminiModel", defaults._geminiModel.current());
+	s._geminiSystemPrompt = j.value("geminiSystemPrompt", defaults._geminiSystemPrompt.current());
 	s._turboSpeed = j.value("turboSpeed", defaults._turboSpeed.current());
 	s._autoVideoFromLinks = j.value("autoVideoFromLinks", defaults._autoVideoFromLinks.current());
 	s._voicemodPreset = j.value("voicemodPreset", defaults._voicemodPreset.current());

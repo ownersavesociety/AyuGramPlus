@@ -3372,6 +3372,8 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 
 		AyuUi::AddReadUntilAction(_menu, item);
 		AyuUi::AddBurnAction(_menu, item);
+		AyuUi::AddAskGeminiAction(_menu, _controller, item);
+		AyuUi::AddResendAsCircleAction(_menu, _controller, item);
 	};
 
 	const auto addReplyAction = [&](HistoryItem *item) {

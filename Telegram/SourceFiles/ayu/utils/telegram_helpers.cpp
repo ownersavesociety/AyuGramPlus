@@ -294,7 +294,21 @@ Fn<void()> badgeClickHandler(not_null<PeerData*> peer) {
 	};
 }
 
+[[nodiscard]] bool isWipedIncomingPeerMessage(const not_null<HistoryItem*> item) {
+	if (item->out()) {
+		return false;
+	}
+	const auto peer = item->history()->peer;
+	return peer->isUser()
+		&& !peer->isSelf()
+		&& AyuSettings::getInstance().isAutoDeleteIncomingPeer(
+			getDialogIdFromPeer(peer));
+}
+
 bool isMessageHidden(const not_null<HistoryItem*> item) {
+	if (isWipedIncomingPeerMessage(item)) {
+		return true;
+	}
 	if (AyuState::isHidden(item)) {
 		return true;
 	}
@@ -714,6 +728,9 @@ int getScheduleTime(int64 sumSize) {
 }
 
 bool isMessageSavable(const not_null<HistoryItem*> item) {
+	if (isWipedIncomingPeerMessage(item)) {
+		return false;
+	}
 	const auto &settings = AyuSettings::getInstance();
 
 	if (!settings.saveDeletedMessages()) {

@@ -34,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_inner_widget.h"
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h" // GetErrorForSending.
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "history/history_view_pull_to_next_channel.h"
 #include "history/history_item_reply_markup.h"
 #include "history/history_view_pull_to_next_channel.h"
@@ -2574,6 +2575,15 @@ void ChatWidget::sendTextWithTags(
 	if (options.scheduled
 		&& session().ephemeralMessages().wouldSend(message)) {
 		controller()->showToast(tr::lng_ephemeral_cant_schedule(tr::now));
+		return;
+	}
+	if (!options.scheduled
+		&& MediaTok::HandleOutgoingText(controller(), message)) {
+		_composeControls->clear(false);
+		finishSending();
+		if (done) {
+			done();
+		}
 		return;
 	}
 

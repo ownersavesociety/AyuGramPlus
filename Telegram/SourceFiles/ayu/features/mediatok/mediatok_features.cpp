@@ -12,8 +12,14 @@
 #include "core/application.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
+#include "data/data_document.h"
+#include "data/data_document_media.h"
+#include "data/data_file_origin.h"
 #include "data/data_folder.h"
 #include "data/data_histories.h"
+#include "data/data_media_types.h"
+#include "data/data_photo.h"
+#include "data/data_photo_media.h"
 #include "data/data_search_controller.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -30,10 +36,12 @@
 #include "styles/style_layers.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/chat/attach/attach_prepare.h"
+#include "ui/image/image.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
 #include "window/window_session_controller.h"
 
+#include <QtCore/QBuffer>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
@@ -89,15 +97,18 @@ void CleanupOldVideoTempDirs() {
 	}
 }
 
-void DownloadYtDlp(
-		not_null<Main::Session*> session,
+void DownloadBinaryTool(
+		const QString &url,
+		const QString &fileName,
+		qint64 minBytes,
+		int timeoutMs,
 		Fn<void(QString exePath, QString error)> done) {
 	const auto targetPath = QFileInfo(
-		cWorkingDir() + u"tdata/yt-dlp.exe"_q).absoluteFilePath();
+		cWorkingDir() + u"tdata/"_q + fileName).absoluteFilePath();
+	const auto tmpPath = targetPath + u".tmp"_q;
 	QDir().mkpath(QFileInfo(targetPath).absolutePath());
 
-	QNetworkRequest req(QUrl(
-		u"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"_q));
+	QNetworkRequest req((QUrl(url)));
 	req.setAttribute(
 		QNetworkRequest::RedirectPolicyAttribute,
 		QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -108,7 +119,7 @@ void DownloadYtDlp(
 	QPointer<QNetworkReply> reply = NetworkManager().get(req);
 	auto timer = new QTimer(reply);
 	timer->setSingleShot(true);
-	timer->setInterval(120000);
+	timer->setInterval(timeoutMs);
 	QObject::connect(timer, &QTimer::timeout, reply, [=] {
 		if (reply) {
 			reply->abort();
@@ -118,7 +129,7 @@ void DownloadYtDlp(
 
 	QObject::connect(reply, &QNetworkReply::finished, [=] {
 		if (!reply) {
-			done(QString(), u"Загрузка yt-dlp отменена"_q);
+			done(QString(), u"Загрузка %1 отменена"_q.arg(fileName));
 			return;
 		}
 		reply->deleteLater();
@@ -127,18 +138,186 @@ void DownloadYtDlp(
 			return;
 		}
 		const auto bytes = reply->readAll();
-		if (bytes.size() < 1024 * 1024) {
-			done(QString(), u"Некорректный файл yt-dlp.exe"_q);
+		if (bytes.size() < minBytes) {
+			done(QString(), u"Некорректный файл %1"_q.arg(fileName));
 			return;
 		}
-		QFile f(targetPath);
+		QFile::remove(tmpPath);
+		QFile f(tmpPath);
 		if (!f.open(QIODevice::WriteOnly)) {
-			done(QString(), u"Не удалось сохранить yt-dlp.exe"_q);
+			done(QString(), u"Не удалось сохранить %1"_q.arg(fileName));
 			return;
 		}
 		f.write(bytes);
 		f.close();
+		QFile::remove(targetPath);
+		if (!QFile::rename(tmpPath, targetPath)) {
+			QFile::remove(tmpPath);
+			done(QString(), u"Не удалось переименовать %1"_q.arg(fileName));
+			return;
+		}
 		done(targetPath, QString());
+	});
+}
+
+void EnsureVideoTools(
+		not_null<Window::SessionController*> controller,
+		bool needYtDlp,
+		bool needFfmpeg,
+		Fn<void(QString ytDlpExe, QString ffmpegExe, QString error)> done) {
+	struct State {
+		QString ytDlp;
+		QString ffmpeg;
+		QString error;
+		int pending = 0;
+	};
+	auto state = std::make_shared<State>();
+	state->ytDlp = FindToolExecutable(u"yt-dlp.exe"_q);
+	state->ffmpeg = FindToolExecutable(u"ffmpeg.exe"_q);
+
+	const bool dlYt = needYtDlp && state->ytDlp.isEmpty();
+	const bool dlFf = needFfmpeg && state->ffmpeg.isEmpty();
+	if (!dlYt && !dlFf) {
+		done(state->ytDlp, state->ffmpeg, QString());
+		return;
+	}
+
+	if (dlYt && dlFf) {
+		controller->showToast(u"MediaTok: скачиваю yt-dlp.exe и ffmpeg.exe (один раз)..."_q);
+	} else if (dlYt) {
+		controller->showToast(u"MediaTok: скачиваю yt-dlp.exe (один раз)..."_q);
+	} else {
+		controller->showToast(u"MediaTok: скачиваю ffmpeg.exe (~79 МБ, один раз)..."_q);
+	}
+
+	state->pending = (dlYt ? 1 : 0) + (dlFf ? 1 : 0);
+	const auto finishOne = [=] {
+		if (--state->pending == 0) {
+			done(state->ytDlp, state->ffmpeg, state->error);
+		}
+	};
+
+	if (dlYt) {
+		DownloadBinaryTool(
+			u"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"_q,
+			u"yt-dlp.exe"_q,
+			1024 * 1024,
+			120000,
+			[=](QString path, QString err) {
+				if (path.isEmpty() && state->error.isEmpty()) {
+					state->error = err;
+				}
+				state->ytDlp = path;
+				finishOne();
+			});
+	}
+	if (dlFf) {
+		DownloadBinaryTool(
+			u"https://github.com/eugeneware/ffmpeg-static/releases/latest/download/ffmpeg-win32-x64"_q,
+			u"ffmpeg.exe"_q,
+			10 * 1024 * 1024,
+			240000,
+			[=](QString path, QString err) {
+				if (path.isEmpty() && state->error.isEmpty()) {
+					state->error = err;
+				}
+				state->ffmpeg = path;
+				finishOne();
+			});
+	}
+}
+
+void ConvertVideoFileToCircleAndSend(
+		not_null<Window::SessionController*> controller,
+		not_null<History*> history,
+		const Api::SendAction &baseAction,
+		const QString &sourcePath,
+		const QString &cleanupDir) {
+	const auto weak = base::make_weak(controller);
+	const auto session = &history->session();
+
+	EnsureVideoTools(controller, false, true, [=](
+			QString,
+			QString ffmpegExe,
+			QString error) {
+		const auto strong = weak.get();
+		if (ffmpegExe.isEmpty()) {
+			if (!cleanupDir.isEmpty()) {
+				QDir(cleanupDir).removeRecursively();
+			}
+			if (strong) {
+				strong->showToast(u"MediaTok ffmpeg: %1"_q.arg(error));
+			}
+			return;
+		}
+		if (strong) {
+			strong->showToast(u"MediaTok: делаю кружок..."_q);
+		}
+
+		CleanupOldVideoTempDirs();
+		const auto circleDir = QFileInfo(
+			cWorkingDir()
+			+ u"tdata/MediaTok_Videos/circle_%1_%2"_q
+				.arg(QDateTime::currentMSecsSinceEpoch())
+				.arg(base::RandomValue<uint32>())
+		).absoluteFilePath();
+		QDir().mkpath(circleDir);
+		const auto outPath = circleDir + u"/circle.mp4"_q;
+
+		crl::async([=] {
+			QStringList args;
+			args << u"-y"_q
+				<< u"-i"_q << sourcePath
+				<< u"-t"_q << u"60"_q
+				<< u"-vf"_q << u"crop='min(iw,ih)':'min(iw,ih)',scale=384:384:flags=lanczos,setsar=1"_q
+				<< u"-c:v"_q << u"libx264"_q
+				<< u"-profile:v"_q << u"baseline"_q
+				<< u"-level"_q << u"3.1"_q
+				<< u"-preset"_q << u"veryfast"_q
+				<< u"-crf"_q << u"23"_q
+				<< u"-pix_fmt"_q << u"yuv420p"_q
+				<< u"-c:a"_q << u"aac"_q
+				<< u"-b:a"_q << u"96k"_q
+				<< u"-ac"_q << u"1"_q
+				<< u"-ar"_q << u"48000"_q
+				<< u"-movflags"_q << u"+faststart"_q
+				<< outPath;
+
+			int code = -1;
+			const bool ok = RunHiddenProcess(ffmpegExe, args, circleDir, 180000, &code);
+			QByteArray mp4Bytes;
+			if (ok) {
+				QFile f(outPath);
+				if (f.open(QIODevice::ReadOnly)) {
+					if (f.size() > 0 && f.size() <= 50 * 1024 * 1024) {
+						mp4Bytes = f.readAll();
+					}
+					f.close();
+				}
+			}
+			QDir(circleDir).removeRecursively();
+			if (!cleanupDir.isEmpty()) {
+				QDir(cleanupDir).removeRecursively();
+			}
+
+			crl::on_main(session, [=] {
+				if (mp4Bytes.isEmpty()) {
+					if (const auto s = weak.get()) {
+						s->showToast(u"MediaTok: не удалось сконвертировать видео в кружок"_q);
+					}
+					return;
+				}
+				auto sendAction = baseAction;
+				sendAction.clearDraft = false;
+				sendAction.generateLocal = true;
+				session->api().sendVoiceMessage(
+					mp4Bytes,
+					{},
+					0,
+					true,
+					sendAction);
+			});
+		});
 	});
 }
 
@@ -147,12 +326,12 @@ void RunYtDlpDownload(
 		not_null<History*> history,
 		const Api::SendAction &baseAction,
 		const QString &ytDlpExe,
+		const QString &ffmpegExe,
 		const QString &url,
+		bool asCircle,
 		std::optional<Api::MessageToSend> fallbackMessage) {
 	const auto weak = base::make_weak(controller);
 	const auto session = &history->session();
-	const auto peer = history->peer;
-	const auto ffmpegExe = FindToolExecutable(u"ffmpeg.exe"_q);
 
 	CleanupOldVideoTempDirs();
 	const auto jobDir = QFileInfo(
@@ -188,7 +367,7 @@ void RunYtDlpDownload(
 
 		if (!ffmpegExe.isEmpty()) {
 			args << u"--ffmpeg-location"_q << ffmpegExe
-				<< u"-f"_q << u"bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b"_q
+				<< u"-f"_q << u"bv*[vcodec^=avc1][filesize<1900M]+ba[ext=m4a]/b[ext=mp4]/b"_q
 				<< u"--merge-output-format"_q << u"mp4"_q;
 		} else {
 			args << u"-f"_q << u"best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best"_q;
@@ -220,6 +399,19 @@ void RunYtDlpDownload(
 					u"не удалось скачать видео по ссылке"_q);
 				return;
 			}
+			if (asCircle) {
+				if (const auto s = weak.get()) {
+					ConvertVideoFileToCircleAndSend(
+						s,
+						history,
+						baseAction,
+						downloadedPath,
+						jobDir);
+				} else {
+					QDir(jobDir).removeRecursively();
+				}
+				return;
+			}
 			const auto premium = session->user()->isPremium();
 			auto list = Storage::PrepareMediaList(
 				QStringList{ downloadedPath },
@@ -249,57 +441,105 @@ void DownloadAndSendVideoFromUrl(
 		not_null<History*> history,
 		const Api::SendAction &baseAction,
 		const QString &url,
+		bool asCircle,
 		std::optional<Api::MessageToSend> fallbackMessage) {
 	const auto weak = base::make_weak(controller);
 	const auto session = &history->session();
-	const auto existing = FindToolExecutable(u"yt-dlp.exe"_q);
-	if (!existing.isEmpty()) {
-		if (!fallbackMessage.has_value()) {
-			controller->showToast(u"MediaTok: скачиваю видео..."_q);
-		} else {
-			controller->showToast(u"MediaTok: загружаю видео по ссылке..."_q);
-		}
-		RunYtDlpDownload(
-			controller,
-			history,
-			baseAction,
-			existing,
-			url,
-			std::move(fallbackMessage));
-		return;
-	}
-
-	controller->showToast(u"MediaTok: скачиваю yt-dlp.exe (один раз)..."_q);
 	const auto fallbackHolder = std::make_shared<std::optional<Api::MessageToSend>>(
 		std::move(fallbackMessage));
-	DownloadYtDlp(session, [=](
-			QString exePath,
+
+	EnsureVideoTools(controller, true, asCircle, [=](
+			QString ytDlpExe,
+			QString ffmpegExe,
 			QString error) {
 		const auto strong = weak.get();
-		if (exePath.isEmpty()) {
+		if (ytDlpExe.isEmpty() || (asCircle && ffmpegExe.isEmpty())) {
 			if (fallbackHolder->has_value()) {
 				auto msg = std::move(**fallbackHolder);
 				fallbackHolder->reset();
 				msg.action.generateLocal = true;
 				session->api().sendMessage(std::move(msg));
 			} else if (strong) {
-				strong->showToast(u"MediaTok yt-dlp: %1"_q.arg(error));
+				strong->showToast(u"MediaTok: %1"_q.arg(error));
 			}
 			return;
 		}
 		if (strong) {
-			strong->showToast(u"MediaTok: скачиваю видео..."_q);
+			strong->showToast(asCircle
+				? u"MediaTok: скачиваю видео для кружка..."_q
+				: (fallbackHolder->has_value()
+					? u"MediaTok: загружаю видео по ссылке..."_q
+					: u"MediaTok: скачиваю видео..."_q));
 			auto nextFallback = std::move(*fallbackHolder);
 			fallbackHolder->reset();
 			RunYtDlpDownload(
 				strong,
 				history,
 				baseAction,
-				exePath,
+				ytDlpExe,
+				ffmpegExe,
 				url,
+				asCircle,
 				std::move(nextFallback));
 		}
 	});
+}
+
+QByteArray ExtractPhotoJpeg(HistoryItem *item) {
+	if (!item) {
+		return {};
+	}
+	const auto media = item->media();
+	if (!media) {
+		return {};
+	}
+	const auto photo = media->photo();
+	if (!photo || photo->isNull()) {
+		return {};
+	}
+	const auto view = photo->createMediaView();
+	view->wanted(Data::PhotoSize::Large, item->fullId());
+	auto bytes = view->imageBytes(Data::PhotoSize::Large);
+	if (!bytes.isEmpty()) {
+		return bytes;
+	}
+	const auto img = view->image(Data::PhotoSize::Large)
+		? view->image(Data::PhotoSize::Large)
+		: view->image(Data::PhotoSize::Thumbnail);
+	if (img && !img->original().isNull()) {
+		QBuffer buf(&bytes);
+		buf.open(QIODevice::WriteOnly);
+		img->original().save(&buf, "JPEG", 85);
+	}
+	return bytes;
+}
+
+std::vector<QString> SplitMessageChunks(const QString &text, int maxLen = 4000) {
+	std::vector<QString> chunks;
+	int pos = 0;
+	const int len = text.size();
+	while (pos < len) {
+		if (len - pos <= maxLen) {
+			chunks.push_back(text.mid(pos));
+			break;
+		}
+		int splitAt = text.lastIndexOf('\n', pos + maxLen);
+		if (splitAt <= pos + maxLen / 2) {
+			splitAt = text.lastIndexOf(' ', pos + maxLen);
+		}
+		if (splitAt <= pos) {
+			splitAt = pos + maxLen;
+		}
+		const auto chunk = text.mid(pos, splitAt - pos).trimmed();
+		if (!chunk.isEmpty()) {
+			chunks.push_back(chunk);
+		}
+		pos = splitAt;
+		while (pos < len && (text[pos] == '\n' || text[pos] == ' ')) {
+			++pos;
+		}
+	}
+	return chunks;
 }
 
 bool IsStandaloneHttpUrl(const QString &text) {
@@ -338,6 +578,10 @@ std::optional<int> ParseVoicemodArg(const QString &arg) {
 		return 4;
 	} else if (k == u"5"_q || k == u"echo"_q || k == u"эхо"_q) {
 		return 5;
+	} else if (k == u"6"_q || k == u"anon"_q || k == u"whisper"_q || k == u"аноним"_q || k == u"шёпот"_q || k == u"шепот"_q) {
+		return 6;
+	} else if (k == u"7"_q || k == u"bass"_q || k == u"studio"_q || k == u"студия"_q) {
+		return 7;
 	}
 	return std::nullopt;
 }
@@ -351,6 +595,8 @@ QString VoicemodPresetName(int preset) {
 	case 3: return u"Робот"_q;
 	case 4: return u"Рация / Мегафон"_q;
 	case 5: return u"Эхо"_q;
+	case 6: return u"Аноним (Шёпот)"_q;
+	case 7: return u"Студийный бас"_q;
 	default: return u"Выкл (Обычный)"_q;
 	}
 }
@@ -358,7 +604,8 @@ QString VoicemodPresetName(int preset) {
 void AskGemini(
 		not_null<Main::Session*> session,
 		const QString &prompt,
-		Fn<void(QString answer, QString error)> callback) {
+		Fn<void(QString answer, QString error)> callback,
+		const QByteArray &imageJpegBytes) {
 	const auto &settings = AyuSettings::getInstance();
 	const auto apiKey = settings.geminiApiKey().trimmed();
 	if (apiKey.isEmpty()) {
@@ -379,16 +626,36 @@ void AskGemini(
 		.arg(QString::fromLatin1(QUrl::toPercentEncoding(model, "-._")),
 			QString::fromLatin1(QUrl::toPercentEncoding(apiKey)));
 
-	QJsonObject part;
-	part.insert(u"text"_q, prompt);
 	QJsonArray parts;
-	parts.append(part);
+	if (!imageJpegBytes.isEmpty()) {
+		QJsonObject inlineData;
+		inlineData.insert(u"mime_type"_q, u"image/jpeg"_q);
+		inlineData.insert(u"data"_q, QString::fromLatin1(imageJpegBytes.toBase64()));
+		QJsonObject imgPart;
+		imgPart.insert(u"inline_data"_q, inlineData);
+		parts.append(imgPart);
+	}
+	QJsonObject textPart;
+	textPart.insert(u"text"_q, prompt);
+	parts.append(textPart);
+
 	QJsonObject content;
 	content.insert(u"parts"_q, parts);
 	QJsonArray contents;
 	contents.append(content);
 	QJsonObject root;
 	root.insert(u"contents"_q, contents);
+
+	const auto systemPrompt = settings.geminiSystemPrompt().trimmed();
+	if (!systemPrompt.isEmpty()) {
+		QJsonObject sysPart;
+		sysPart.insert(u"text"_q, systemPrompt);
+		QJsonArray sysParts;
+		sysParts.append(sysPart);
+		QJsonObject sysObj;
+		sysObj.insert(u"parts"_q, sysParts);
+		root.insert(u"system_instruction"_q, sysObj);
+	}
 
 	const auto body = QJsonDocument(root).toJson(QJsonDocument::Compact);
 
@@ -446,6 +713,147 @@ void AskGemini(
 		}
 		callback(QString(), u"Пустой ответ от Gemini"_q);
 	});
+}
+
+void TestGeminiApi(not_null<Window::SessionController*> controller) {
+	const auto weak = base::make_weak(controller);
+	const auto session = &controller->session();
+	auto model = AyuSettings::getInstance().geminiModel().trimmed();
+	if (model.isEmpty()) {
+		model = u"gemini-2.5-flash"_q;
+	}
+	controller->showToast(u"Gemini (%1): проверяю ключ..."_q.arg(model));
+	AskGemini(session, u"Ответь ровно одним словом: OK"_q, [=](QString answer, QString error) {
+		const auto strong = weak.get();
+		if (!strong) {
+			return;
+		}
+		if (!error.isEmpty()) {
+			strong->showToast(u"Gemini ошибка: %1"_q.arg(error));
+			return;
+		}
+		strong->showToast(u"Gemini (%1) работает: %2"_q.arg(model, answer.left(80)));
+	});
+}
+
+void AskGeminiAboutItem(
+		not_null<Window::SessionController*> controller,
+		not_null<HistoryItem*> item) {
+	const auto weak = base::make_weak(controller);
+	const auto session = &controller->session();
+	const auto text = item->originalText().text.trimmed();
+	const auto photoBytes = ExtractPhotoJpeg(item);
+	if (text.isEmpty() && photoBytes.isEmpty()) {
+		controller->showToast(u"MediaTok: в этом сообщении нет текста или загруженного фото"_q);
+		return;
+	}
+	QString prompt;
+	if (!photoBytes.isEmpty() && !text.isEmpty()) {
+		prompt = u"Проанализируй изображение и текст:\n\"%1\"\n\nДай понятный ответ или перевод."_q.arg(text);
+	} else if (!photoBytes.isEmpty()) {
+		prompt = u"Что на этом изображении? Опиши кратко и по сути (и переведи текст на нём, если он есть)."_q;
+	} else {
+		prompt = u"Объясни или переведи это сообщение понятно и по сути:\n\n%1"_q.arg(text);
+	}
+	controller->showToast(
+		u"Gemini (%1) анализирует..."_q.arg(AyuSettings::getInstance().geminiModel()));
+	AskGemini(session, prompt, [=](QString answer, QString error) {
+		const auto strong = weak.get();
+		if (!strong) {
+			return;
+		}
+		if (!error.isEmpty()) {
+			strong->showToast(u"Gemini: %1"_q.arg(error));
+			return;
+		}
+		strong->show(Ui::MakeInformBox(answer));
+	}, photoBytes);
+}
+
+bool HasYtDlpTool() {
+	return !FindToolExecutable(u"yt-dlp.exe"_q).isEmpty();
+}
+
+bool HasFfmpegTool() {
+	return !FindToolExecutable(u"ffmpeg.exe"_q).isEmpty();
+}
+
+void DownloadVideoTools(
+		not_null<Window::SessionController*> controller,
+		Fn<void()> onUpdated) {
+	const auto weak = base::make_weak(controller);
+	EnsureVideoTools(controller, true, true, [=](
+			QString yt,
+			QString ff,
+			QString error) {
+		if (const auto strong = weak.get()) {
+			if (yt.isEmpty() || ff.isEmpty()) {
+				strong->showToast(u"MediaTok инструменты: %1"_q.arg(error));
+			} else {
+				strong->showToast(u"MediaTok: yt-dlp.exe и ffmpeg.exe готовы!"_q);
+			}
+		}
+		if (onUpdated) {
+			onUpdated();
+		}
+	});
+}
+
+bool CanResendAsCircle(HistoryItem *item) {
+	if (!item || !item->isRegular() || item->isLocal()) {
+		return false;
+	}
+	const auto media = item->media();
+	if (!media) {
+		return false;
+	}
+	const auto doc = media->document();
+	if (!doc || doc->isVideoMessage()) {
+		return false;
+	}
+	return doc->isVideoFile() || doc->isAnimation() || doc->isGifv();
+}
+
+void ResendItemAsCircle(
+		not_null<Window::SessionController*> controller,
+		not_null<HistoryItem*> item) {
+	if (!CanResendAsCircle(item)) {
+		return;
+	}
+	const auto doc = item->media()->document();
+	if (!doc) {
+		return;
+	}
+	const auto history = item->history();
+	const auto action = Api::SendAction(history);
+
+	const auto path = doc->filepath(true);
+	if (!path.isEmpty() && QFileInfo::exists(path)) {
+		ConvertVideoFileToCircleAndSend(controller, history, action, path, QString());
+		return;
+	}
+	if (const auto view = doc->createMediaView()) {
+		const auto bytes = view->bytes();
+		if (!bytes.isEmpty()) {
+			const auto tempDir = QFileInfo(
+				cWorkingDir()
+				+ u"tdata/MediaTok_Videos/src_%1_%2"_q
+					.arg(QDateTime::currentMSecsSinceEpoch())
+					.arg(base::RandomValue<uint32>())
+			).absoluteFilePath();
+			QDir().mkpath(tempDir);
+			const auto tmpPath = tempDir + u"/source.mp4"_q;
+			QFile f(tmpPath);
+			if (f.open(QIODevice::WriteOnly)) {
+				f.write(bytes);
+				f.close();
+				ConvertVideoFileToCircleAndSend(controller, history, action, tmpPath, tempDir);
+				return;
+			}
+			QDir(tempDir).removeRecursively();
+		}
+	}
+	controller->showToast(u"MediaTok: сначала открой/скачай видео в чате, чтобы сделать кружок"_q);
 }
 
 void DeleteMyMessagesInPeer(
@@ -790,16 +1198,17 @@ bool HandleOutgoingText(
 		|| trimmed.compare(u".help"_q, Qt::CaseInsensitive) == 0) {
 		controller->show(Ui::MakeInformBox(
 			u"Команды MediaTok:\n\n"
-			"• .ai <вопрос> — спросить Gemini и отправить ответ в чат (можно ответом на сообщение)\n"
+			"• .ai <вопрос> — спросить Gemini и отправить ответ в чат (понимает текст и фото в реплае!)\n"
 			"• .ai! <вопрос> — спросить Gemini скрытно (показать ответ только вам)\n"
+			"• .circle <ссылка> — скачать видео и отправить как КРУЖОК (или реплаем .circle на видео/GIF в чате)\n"
+			"• .dl <ссылка> — скачать видео и отправить вместо ссылки\n"
+			"• .raw <текст> — отправить текст/ссылку без авто-скачивания видео\n"
 			"• .delme — удалить все ваши сообщения в этом чате\n"
 			"• .delmeall — удалить все ваши сообщения во всех чатах\n"
 			"• .wipe — включить мгновенное удаление входящих от собеседника в ЛС (у обоих)\n"
 			"• .wipe all — снести всю историю ЛС у обоих + включить .wipe\n"
 			"• .unwipe — выключить авто-удаление входящих в ЛС\n"
-			"• .vm <off|deep|helium|robot|radio|echo> — переключить Voicemod\n"
-			"• .dl <ссылка> — скачать видео и отправить вместо ссылки\n"
-			"• .raw <текст> — отправить текст/ссылку без авто-скачивания видео"_q));
+			"• .vm <off|deep|helium|robot|radio|echo|anon|bass> — переключить Voicemod"_q));
 		return true;
 	}
 
@@ -850,7 +1259,7 @@ bool HandleOutgoingText(
 		|| trimmed.startsWith(u".vm "_q, Qt::CaseInsensitive)) {
 		const auto arg = trimmed.mid(3).trimmed();
 		if (arg.isEmpty()) {
-			const int nextPreset = (AyuSettings::getInstance().voicemodPreset() + 1) % 6;
+			const int nextPreset = (AyuSettings::getInstance().voicemodPreset() + 1) % kVoicemodPresetCount;
 			AyuSettings::getInstance().setVoicemodPreset(nextPreset);
 			controller->showToast(u"Voicemod: %1"_q.arg(VoicemodPresetName(nextPreset)));
 			return true;
@@ -860,7 +1269,7 @@ bool HandleOutgoingText(
 			controller->showToast(u"Voicemod: %1"_q.arg(VoicemodPresetName(*parsed)));
 		} else {
 			controller->showToast(
-				u"Режимы Voicemod: off, deep, helium, robot, radio, echo (или 0..5)"_q);
+				u"Режимы Voicemod: off, deep, helium, robot, radio, echo, anon, bass (0..7)"_q);
 		}
 		return true;
 	}
@@ -874,8 +1283,10 @@ bool HandleOutgoingText(
 		auto prompt = isAiPrivate
 			? trimmed.mid(4).trimmed()
 			: trimmed.mid(3).trimmed();
+		QByteArray replyPhotoJpeg;
 		if (const auto replyId = message.action.replyTo.messageId) {
 			if (const auto replyItem = history->owner().message(replyId)) {
+				replyPhotoJpeg = ExtractPhotoJpeg(replyItem);
 				const auto replyText = replyItem->originalText().text.trimmed();
 				if (!replyText.isEmpty()) {
 					prompt = prompt.isEmpty()
@@ -884,8 +1295,11 @@ bool HandleOutgoingText(
 				}
 			}
 		}
+		if (prompt.isEmpty() && !replyPhotoJpeg.isEmpty()) {
+			prompt = u"Что изображено на этом фото? Опиши понятно и по сути."_q;
+		}
 		if (prompt.isEmpty()) {
-			controller->showToast(u"Напиши запрос после .ai или ответь на сообщение"_q);
+			controller->showToast(u"Напиши запрос после .ai или ответь на сообщение/фото"_q);
 			return true;
 		}
 		controller->showToast(
@@ -905,12 +1319,54 @@ bool HandleOutgoingText(
 				}
 				return;
 			}
-			auto outMsg = Api::MessageToSend(savedAction);
-			outMsg.textWithTags = { answer, {} };
-			outMsg.action.clearDraft = false;
-			outMsg.action.generateLocal = true;
-			session->api().sendMessage(std::move(outMsg));
-		});
+			const auto chunks = SplitMessageChunks(answer, 4000);
+			for (int i = 0; i < int(chunks.size()); ++i) {
+				auto outMsg = Api::MessageToSend(savedAction);
+				if (i > 0) {
+					outMsg.action.replyTo = {};
+				}
+				outMsg.textWithTags = { chunks[i], {} };
+				outMsg.action.clearDraft = false;
+				outMsg.action.generateLocal = true;
+				if (i == 0) {
+					session->api().sendMessage(std::move(outMsg));
+				} else {
+					const auto delayedMsg = std::make_shared<Api::MessageToSend>(
+						std::move(outMsg));
+					base::call_delayed(
+						crl::time(i * 350),
+						session,
+						[=] {
+							session->api().sendMessage(std::move(*delayedMsg));
+						});
+				}
+			}
+		}, replyPhotoJpeg);
+		return true;
+	}
+
+	if (trimmed.compare(u".circle"_q, Qt::CaseInsensitive) == 0
+		|| trimmed.startsWith(u".circle "_q, Qt::CaseInsensitive)) {
+		const auto arg = trimmed.mid(7).trimmed();
+		if (!arg.isEmpty()) {
+			DownloadAndSendVideoFromUrl(
+				controller,
+				history,
+				message.action,
+				arg,
+				true,
+				std::nullopt);
+			return true;
+		}
+		if (const auto replyId = message.action.replyTo.messageId) {
+			if (const auto replyItem = history->owner().message(replyId)) {
+				if (CanResendAsCircle(replyItem)) {
+					ResendItemAsCircle(controller, replyItem);
+					return true;
+				}
+			}
+		}
+		controller->showToast(u"Укажи ссылку (.circle https://...) или ответь .circle на видео/GIF"_q);
 		return true;
 	}
 
@@ -922,6 +1378,7 @@ bool HandleOutgoingText(
 				history,
 				message.action,
 				url,
+				false,
 				std::nullopt);
 			return true;
 		}
@@ -934,6 +1391,7 @@ bool HandleOutgoingText(
 			history,
 			message.action,
 			trimmed,
+			false,
 			message);
 		return true;
 	}
