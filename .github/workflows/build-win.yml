@@ -114,11 +114,24 @@ jobs:
           key: ${{ runner.OS }}-x64-qt6-${{ env.CACHE_KEY }}
           restore-keys: ${{ runner.OS }}-x64-qt6-
 
-      - name: Skip unused breakpad dump_syms (lacks MSVC ATL on runner)
+      - name: Free disk space, skip unused dump_syms, and prune Qt Debug intermediates
         if: env.BUILD_CONFIG == 'Release'
         shell: bash
         run: |
-          sed -i '/dump_syms/d' "$TBUILD/$REPO_NAME/$PREPARE_PATH"
+          set -e
+          df -h /c || true
+          rm -rf /c/Android /c/Strawberry /c/msys64 /c/SeleniumWebDrivers /c/hostedtoolcache/windows/CodeQL /c/hostedtoolcache/windows/go /c/hostedtoolcache/windows/Ruby /c/hostedtoolcache/windows/Java* /c/ProgramData/chocolatey || true
+          LIB_UNIX=$(cygpath -u "$LibrariesPath")
+          if [ -d "$LIB_UNIX" ]; then
+            find "$LIB_UNIX" -type f \( -name '*.obj' -o -name '*.pch' -o -name '*.idb' \) -delete || true
+            if [ ! -f "$LIB_UNIX/cache_keys/qt_6.11.2" ]; then
+              rm -rf "$LIB_UNIX"/[qQ]t* || true
+            fi
+          fi
+          TBUILD_UNIX=$(cygpath -u "$TBUILD")
+          sed -i '/dump_syms/d' "$TBUILD_UNIX/$REPO_NAME/$PREPARE_PATH"
+          python3 -c 'import pathlib; p = pathlib.Path(r"'"$TBUILD/$REPO_NAME/$PREPARE_PATH"'"); t = p.read_text(); t = t.replace("    cmake --install . --config Debug\n    cmake --build .", "    cmake --install . --config Debug\n    del /s /q *.obj *.pch >nul 2>nul\n    cmake --build ."); p.write_text(t)' || true
+          df -h /c || true
 
       - name: Build / Prepare Libraries
         run: |
