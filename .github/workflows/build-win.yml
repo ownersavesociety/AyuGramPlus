@@ -114,6 +114,12 @@ jobs:
           key: ${{ runner.OS }}-x64-qt6-${{ env.CACHE_KEY }}
           restore-keys: ${{ runner.OS }}-x64-qt6-
 
+      - name: Skip unused breakpad dump_syms (lacks MSVC ATL on runner)
+        if: env.BUILD_CONFIG == 'Release'
+        shell: bash
+        run: |
+          sed -i '/dump_syms/d' "$TBUILD/$REPO_NAME/$PREPARE_PATH"
+
       - name: Build / Prepare Libraries
         run: |
           if "%BUILD_CONFIG%"=="Debug" (
