@@ -6,6 +6,7 @@
 #include "ayu/ui/boxes/edit_mark_box.h"
 #include "ayu/ui/settings/ayu_builder.h"
 #include "ayu/ui/settings/settings_main.h"
+#include "base/weak_ptr.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_settings.h"
 #include "ui/boxes/single_choice_box.h"
@@ -64,24 +65,26 @@ void BuildGeminiSection(SectionBuilder &builder) {
 		.title = rpl::single(u"Модель Gemini"_q),
 		.icon = { &st::menuIconEdit },
 		.label = settings->geminiModelValue() | rpl::map([](const QString &m) {
-			return m.trimmed().isEmpty() ? u"gemini-2.5-flash"_q : m;
+			return m.trimmed().isEmpty() ? u"gemini-4-hydrogen"_q : m;
 		}),
 		.onClick = [=] {
 			if (!controller) {
 				return;
 			}
 			const auto models = std::vector<QString>{
-				u"gemini-2.5-flash"_q,
+				u"gemini-4-hydrogen"_q,
+				u"gemini-4-carbon"_q,
+				u"gemini-3.1-pro-preview"_q,
 				u"gemini-2.5-pro"_q,
 				u"gemini-3-flash-preview"_q,
-				u"gemini-3.1-pro-preview"_q,
-				u"gemini-2.0-flash"_q,
+				u"gemini-2.5-flash"_q,
 				u"Ввести вручную..."_q,
 			};
+			const int presetCount = int(models.size()) - 1;
 			const auto current = AyuSettings::getInstance().geminiModel().trimmed();
 			int initialIndex = 0;
 			bool matched = false;
-			for (int i = 0; i < 5; ++i) {
+			for (int i = 0; i < presetCount; ++i) {
 				if (current.compare(models[i], Qt::CaseInsensitive) == 0) {
 					initialIndex = i;
 					matched = true;
@@ -89,32 +92,82 @@ void BuildGeminiSection(SectionBuilder &builder) {
 				}
 			}
 			if (!matched && !current.isEmpty()) {
-				initialIndex = 5;
+				initialIndex = presetCount;
 			}
+			const auto weak = base::make_weak(controller);
 			controller->show(Box([=](not_null<Ui::GenericBox*> box) {
 				SingleChoiceBox(box, {
 					.title = rpl::single(u"Выбор модели Gemini"_q),
 					.options = models,
 					.initialSelection = initialIndex,
 					.callback = [=](int index) {
-						if (index >= 0 && index < 5) {
+						if (index >= 0 && index < presetCount) {
 							AyuSettings::getInstance().setGeminiModel(models[index]);
-						} else {
-							controller->show(Box<EditMarkBox>(
+						} else if (const auto strong = weak.get()) {
+							strong->show(Box<EditMarkBox>(
 								rpl::single(u"Модель Gemini (id)"_q),
 								AyuSettings::getInstance().geminiModel(),
-								u"gemini-2.5-flash"_q,
+								u"gemini-4-hydrogen"_q,
 								[=](const QString &value) {
 									const auto trimmed = value.trimmed();
 									AyuSettings::getInstance().setGeminiModel(
 										trimmed.isEmpty()
-											? u"gemini-2.5-flash"_q
+											? u"gemini-4-hydrogen"_q
 											: trimmed);
 								}));
 						}
 					},
 				});
 			}));
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/fetchGeminiModels"_q,
+		.title = rpl::single(u"Загрузить модели из Gemini API (по ключу)"_q),
+		.icon = { &st::menuIconBot },
+		.onClick = [=] {
+			if (!controller) {
+				return;
+			}
+			const auto weak = base::make_weak(controller);
+			controller->showToast(u"Gemini: загружаю список моделей..."_q);
+			MediaTok::FetchGeminiModels(controller, [=](
+					std::vector<QString> fetched,
+					QString error) {
+				const auto strong = weak.get();
+				if (!strong) {
+					return;
+				}
+				if (!error.isEmpty()) {
+					strong->showToast(u"Gemini: %1"_q.arg(error));
+					return;
+				}
+				const auto current = AyuSettings::getInstance().geminiModel().trimmed();
+				int initialIndex = 0;
+				for (int i = 0; i < int(fetched.size()); ++i) {
+					if (current.compare(fetched[i], Qt::CaseInsensitive) == 0) {
+						initialIndex = i;
+						break;
+					}
+				}
+				strong->show(Box([=](not_null<Ui::GenericBox*> box) {
+					SingleChoiceBox(box, {
+						.title = rpl::single(u"Модели из вашего Gemini API"_q),
+						.options = fetched,
+						.initialSelection = initialIndex,
+						.callback = [=](int index) {
+							if (index >= 0 && index < int(fetched.size())) {
+								AyuSettings::getInstance().setGeminiModel(fetched[index]);
+								if (const auto s = weak.get()) {
+									s->showToast(
+										u"MediaTok: выбрана модель %1"_q.arg(fetched[index]));
+								}
+							}
+						},
+					});
+				}));
+			});
 		},
 	});
 

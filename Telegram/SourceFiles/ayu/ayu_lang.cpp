@@ -14,6 +14,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QtCore/QRegularExpression>
 
 // hard-coded languages
 std::map<QString, QString> langMapping = {
@@ -205,6 +206,11 @@ void AyuLanguage::applyLanguageJson(QJsonDocument doc) {
 		} else if (val.contains(qsl("%1$s")) && val.contains(qsl("%2$s"))) {
 			val = val.replace(qsl("%1$s"), qsl("{item1}")).replace(qsl("%2$s"), qsl("{item2}"));
 		}
+
+		static const QRegularExpression reBrand(
+			uR"((?:AyuGram\s*Desktop|AyuGram|Аюграм(?:ом|ами|ах|ов|а|у|е|ы)?))"_q,
+			QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption);
+		val.replace(reBrand, u"MediaTok"_q);
 
 		Lang::GetInstance().resetValue(key.toUtf8());
 		Lang::GetInstance().applyValue(key.toUtf8(), val.toUtf8());

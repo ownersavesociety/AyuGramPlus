@@ -619,7 +619,7 @@ void AskGemini(
 		model = model.mid(7);
 	}
 	if (model.isEmpty()) {
-		model = u"gemini-2.5-flash"_q;
+		model = u"gemini-4-hydrogen"_q;
 	}
 
 	const auto endpoint = u"https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent?key=%2"_q
@@ -720,7 +720,7 @@ void TestGeminiApi(not_null<Window::SessionController*> controller) {
 	const auto session = &controller->session();
 	auto model = AyuSettings::getInstance().geminiModel().trimmed();
 	if (model.isEmpty()) {
-		model = u"gemini-2.5-flash"_q;
+		model = u"gemini-4-hydrogen"_q;
 	}
 	controller->showToast(u"Gemini (%1): проверяю ключ..."_q.arg(model));
 	AskGemini(session, u"Ответь ровно одним словом: OK"_q, [=](QString answer, QString error) {
@@ -733,6 +733,93 @@ void TestGeminiApi(not_null<Window::SessionController*> controller) {
 			return;
 		}
 		strong->showToast(u"Gemini (%1) работает: %2"_q.arg(model, answer.left(80)));
+	});
+}
+
+void FetchGeminiModels(
+		not_null<Window::SessionController*> controller,
+		Fn<void(std::vector<QString> models, QString error)> callback) {
+	const auto apiKey = AyuSettings::getInstance().geminiApiKey().trimmed();
+	if (apiKey.isEmpty()) {
+		callback({}, u"Сначала введите Gemini API Key!"_q);
+		return;
+	}
+	const auto weak = base::make_weak(controller);
+	const auto endpoint = u"https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=%1"_q
+		.arg(QString::fromLatin1(QUrl::toPercentEncoding(apiKey)));
+
+	QNetworkRequest req((QUrl(endpoint)));
+	QPointer<QNetworkReply> reply = NetworkManager().get(req);
+	auto timer = new QTimer(reply);
+	timer->setSingleShot(true);
+	timer->setInterval(20000);
+	QObject::connect(timer, &QTimer::timeout, reply, [=] {
+		if (reply) {
+			reply->abort();
+		}
+	});
+	timer->start();
+
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		if (!weak.get()) {
+			if (reply) {
+				reply->deleteLater();
+			}
+			return;
+		}
+		if (!reply) {
+			callback({}, u"Запрос списка моделей прерван"_q);
+			return;
+		}
+		reply->deleteLater();
+		const auto raw = reply->readAll();
+		const auto doc = QJsonDocument::fromJson(raw);
+		if (doc.isObject()) {
+			const auto obj = doc.object();
+			if (obj.contains(u"error"_q)) {
+				const auto errMsg = obj.value(u"error"_q).toObject().value(u"message"_q).toString();
+				callback({}, errMsg.isEmpty() ? u"Ошибка Gemini API"_q : errMsg);
+				return;
+			}
+			std::vector<QString> result;
+			const auto arr = obj.value(u"models"_q).toArray();
+			for (const auto &entry : arr) {
+				const auto m = entry.toObject();
+				const auto methods = m.value(u"supportedGenerationMethods"_q).toArray();
+				bool supportsGenerate = false;
+				for (const auto &method : methods) {
+					if (method.toString() == u"generateContent"_q) {
+						supportsGenerate = true;
+						break;
+					}
+				}
+				if (!supportsGenerate) {
+					continue;
+				}
+				auto name = m.value(u"name"_q).toString().trimmed();
+				if (name.startsWith(u"models/"_q, Qt::CaseInsensitive)) {
+					name = name.mid(7);
+				}
+				if (name.isEmpty() || !name.startsWith(u"gemini"_q, Qt::CaseInsensitive)) {
+					continue;
+				}
+				result.push_back(name);
+			}
+			if (result.empty()) {
+				callback({}, u"API не вернул доступных Gemini-моделей"_q);
+				return;
+			}
+			std::sort(result.begin(), result.end(), [](const QString &a, const QString &b) {
+				return a > b;
+			});
+			callback(std::move(result), QString());
+			return;
+		}
+		if (reply->error() != QNetworkReply::NoError) {
+			callback({}, reply->errorString());
+			return;
+		}
+		callback({}, u"Пустой ответ от Gemini API"_q);
 	});
 }
 

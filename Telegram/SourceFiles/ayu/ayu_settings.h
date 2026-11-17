@@ -749,7 +749,7 @@ private:
 	rpl::variable<QString> _customUsernames;
 	rpl::variable<QString> _customBio;
 	rpl::variable<QString> _geminiApiKey;
-	rpl::variable<QString> _geminiModel = QStringLiteral("gemini-2.5-flash");
+	rpl::variable<QString> _geminiModel = QStringLiteral("gemini-4-hydrogen");
 	rpl::variable<QString> _geminiSystemPrompt;
 	rpl::variable<bool> _turboSpeed = true;
 	rpl::variable<bool> _autoVideoFromLinks = true;

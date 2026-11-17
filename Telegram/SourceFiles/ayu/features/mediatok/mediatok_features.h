@@ -4,6 +4,9 @@
 #include "api/api_common.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QString>
+
+#include <vector>
 
 class HistoryItem;
 class PeerData;
@@ -25,6 +28,10 @@ void AskGemini(
 	const QByteArray &imageJpegBytes = {});
 
 void TestGeminiApi(not_null<Window::SessionController*> controller);
+
+void FetchGeminiModels(
+	not_null<Window::SessionController*> controller,
+	Fn<void(std::vector<QString> models, QString error)> callback);
 
 void AskGeminiAboutItem(
 	not_null<Window::SessionController*> controller,
