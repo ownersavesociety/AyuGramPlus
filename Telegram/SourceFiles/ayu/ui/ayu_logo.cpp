@@ -10,6 +10,7 @@
 #include "styles/style_ayu_styles.h"
 #include "ui/rect.h"
 
+#include <QDir>
 #include <QSvgRenderer>
 
 static QString LAST_LOADED_NAME;
@@ -21,12 +22,22 @@ namespace AyuAssets {
 QString appIcoPath() {
 	const auto &settings = AyuSettings::getInstance();
 	return cWorkingDir()
-		+ u"tdata/AyuGram-"_q
+		+ u"tdata/MediaTok-"_q
 		+ settings.appIcon()
 		+ u".ico"_q;
 }
 
 void loadAppIco() {
+	const auto tdataDir = QDir(cWorkingDir() + u"tdata"_q);
+	const auto legacyIcons = tdataDir.entryInfoList(
+		{ u"AyuGram-*.ico"_q },
+		QDir::Files);
+	for (const auto &entry : legacyIcons) {
+		auto legacyFile = QFile(entry.absoluteFilePath());
+		legacyFile.setPermissions(QFile::WriteOther);
+		legacyFile.remove();
+	}
+
 	const auto &settings = AyuSettings::getInstance();
 	const auto iconPath = appIcoPath();
 

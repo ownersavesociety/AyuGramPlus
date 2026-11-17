@@ -271,6 +271,16 @@ public:
 	[[nodiscard]] bool isAutoDeleteIncomingPeer(const int64 id) const { return _autoDeleteIncomingPeers.contains(id); }
 	[[nodiscard]] const std::unordered_set<int64> &autoDeleteIncomingPeers() const { return _autoDeleteIncomingPeers; }
 
+	[[nodiscard]] int autoDeleteOutgoingSeconds(int64 id) const;
+	void setAutoDeleteOutgoingSeconds(int64 id, int seconds);
+	void clearAutoDeleteOutgoingPeers();
+	[[nodiscard]] const std::map<int64, int> &autoDeleteOutgoingPeers() const { return _autoDeleteOutgoingPeers; }
+
+	[[nodiscard]] QString peerNote(int64 id) const;
+	void setPeerNote(int64 id, const QString &note);
+	void clearPeerNotes();
+	[[nodiscard]] const std::map<int64, QString> &peerNotes() const { return _peerNotes; }
+
 	void validate();
 
 	[[nodiscard]] bool saveDeletedMessages() const { return _saveDeletedMessages.current(); }
@@ -662,6 +672,8 @@ private:
 	rpl::variable<bool> _saveForBots = false;
 	std::unordered_set<int64> _shadowBanIds;
 	std::unordered_set<int64> _autoDeleteIncomingPeers;
+	std::map<int64, int> _autoDeleteOutgoingPeers;
+	std::map<int64, QString> _peerNotes;
 	rpl::variable<bool> _filtersEnabled = false;
 	rpl::variable<bool> _filtersEnabledInChats = false;
 	rpl::variable<bool> _hideFromBlocked = false;

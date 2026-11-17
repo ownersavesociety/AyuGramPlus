@@ -10,14 +10,6 @@
 #include <qjsondocument.h>
 #include <QTimer>
 
-namespace {
-
-constexpr auto kPrimaryUrl = "https://update.ayugram.one/rc/current/desktop2";
-constexpr auto kExteraUrl = "https://api.exteragram.app/api/v1/profiles/compact";
-constexpr auto kFetchTimeout = 15 * 1000;
-
-}
-
 std::unordered_set<ID> default_developers = {
 	139303278, 168769611, 668557709, 880708503, 963080346, 1156270028, 1282540315, 1348136086, 1374434073, 1752394339,
 	1773117711, 2135966128, 5079320635, 5118627360, 5184725450, 5330087923, 5800413909, 6007644928, 7380551229,
@@ -31,58 +23,18 @@ std::unordered_set<ID> default_channels = {
 };
 
 void RCManager::start() {
-	DEBUG_LOG(("RCManager: starting"));
-	_manager = std::make_unique<QNetworkAccessManager>();
-
-	makeRequest();
-
-	_timer = new QTimer(this);
-	connect(_timer, &QTimer::timeout, this, &RCManager::makeRequest);
-	_timer->start(60 * 60 * 1000); // 1 hour
+	DEBUG_LOG(("RCManager: disabled external AyuGram/exteraGram RC endpoints"));
+	initialized = false;
 }
 
 void RCManager::makeRequest() {
-	_retryAttempted = false;
-	sendRequest();
 }
 
 void RCManager::sendRequest() {
-	if (!_manager) {
-		return;
-	}
-
-	const auto url = QString::fromLatin1(_useExteraFallback ? kExteraUrl : kPrimaryUrl);
-	LOG(("RCManager: requesting map"));
-
-	clearSentRequest();
-
-	auto request = QNetworkRequest(QUrl(url));
-	request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-	request.setTransferTimeout(kFetchTimeout);
-	_reply = _manager->get(request);
-	connect(_reply,
-			&QNetworkReply::finished,
-			[=]
-			{
-				gotResponse();
-			});
-	connect(_reply,
-			&QNetworkReply::errorOccurred,
-			[=](auto e)
-			{
-				gotFailure(e);
-			});
 }
 
 bool RCManager::tryRetryWithExteraFallback() {
-	if (_retryAttempted || _useExteraFallback) {
-		return false;
-	}
-	LOG(("RCManager: switching to extera fallback endpoint"));
-	_useExteraFallback = true;
-	_retryAttempted = true;
-	sendRequest();
-	return true;
+	return false;
 }
 
 void RCManager::gotResponse() {

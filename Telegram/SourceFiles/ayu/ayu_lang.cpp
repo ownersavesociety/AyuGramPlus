@@ -48,7 +48,7 @@ AyuLanguage *AyuLanguage::currentInstance() {
 }
 
 QString AyuLanguage::getCacheDir() const {
-	return cWorkingDir() + u"tdata/ayu/languages/"_q;
+	return cWorkingDir() + u"tdata/mediatok/languages/"_q;
 }
 
 QString AyuLanguage::getCachePath(const QString &langId) const {
@@ -67,6 +67,20 @@ void AyuLanguage::loadCachedLanguage() {
 		return;
 	}
 
+	const auto migrateLegacyLang = [&](const QString &id) {
+		if (id.isEmpty()) {
+			return;
+		}
+		const auto modernPath = getCachePath(id);
+		const auto legacyPath = cWorkingDir() + u"tdata/ayu/languages/"_q + id + u".json"_q;
+		if (!QFile::exists(modernPath) && QFile::exists(legacyPath)) {
+			QDir().mkpath(getCacheDir());
+			QFile::rename(legacyPath, modernPath);
+		}
+	};
+	migrateLegacyLang(finalLangPackId);
+	migrateLegacyLang(langPackBaseId);
+
 	const auto cachePath = getCachePath(finalLangPackId);
 	QFile file(cachePath);
 	if (!file.exists()) {
@@ -84,7 +98,7 @@ void AyuLanguage::loadCachedLanguage() {
 		QJsonParseError error{};
 		const auto doc = QJsonDocument::fromJson(data, &error);
 		if (error.error == QJsonParseError::NoError) {
-			LOG(("Loading cached AyuGram language: %1").arg(finalLangPackId));
+			LOG(("Loading cached MediaTok language: %1").arg(finalLangPackId));
 			applyLanguageJson(doc);
 		}
 	}
@@ -99,7 +113,7 @@ void AyuLanguage::saveCachedLanguage(const QByteArray &json, const QString &lang
 	if (file.open(QIODevice::WriteOnly)) {
 		file.write(json);
 		file.close();
-		LOG(("Cached AyuGram language: %1").arg(langId));
+		LOG(("Cached MediaTok language: %1").arg(langId));
 	}
 }
 
@@ -115,8 +129,6 @@ void AyuLanguage::fetchLanguage(const QString &id, const QString &baseId) {
 		}
 	}
 
-	// using `jsdelivr` since China (...and maybe other?) users have some problems with GitHub
-	// https://crowdin.com/project/ayugram/discussions/6
 	QUrl url;
 	if (!finalLangPackId.isEmpty() && !baseId.isEmpty() && !needFallback) {
 		url.setUrl(qsl("https://cdn.jsdelivr.net/gh/AyuGram/Languages@l10n_main/values/langs/%1/Shared.json").arg(
@@ -126,8 +138,8 @@ void AyuLanguage::fetchLanguage(const QString &id, const QString &baseId) {
 			needFallback ? baseId : finalLangPackId));
 	}
 	_chkReply = networkManager.get(QNetworkRequest(url));
-	connect(_chkReply, SIGNAL(error(QNetworkReply::NetworkError)), this, SLOT(fetchError(QNetworkReply::NetworkError)));
-	connect(_chkReply, SIGNAL(finished()), this, SLOT(fetchFinished()));
+	connect(_chkReply, &QNetworkReply::errorOccurred, this, &AyuLanguage::fetchError);
+	connect(_chkReply, &QNetworkReply::finished, this, &AyuLanguage::fetchFinished);
 }
 
 void AyuLanguage::fetchFinished() {
@@ -138,7 +150,7 @@ void AyuLanguage::fetchFinished() {
 	auto statusCode = _chkReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
 	if (statusCode == 404 && !langPackId.isEmpty() && !langPackBaseId.isEmpty() && !needFallback) {
-		LOG(("AyuGram Language not found! Fallback to main language: %1...").arg(langPackBaseId));
+		LOG(("MediaTok Language not found! Fallback to main language: %1...").arg(langPackBaseId));
 		needFallback = true;
 		_chkReply->disconnect();
 		fetchLanguage("", langPackBaseId);
@@ -165,12 +177,12 @@ void AyuLanguage::fetchError(QNetworkReply::NetworkError e) {
 		const auto id = Lang::GetInstance().id();
 
 		if (!id.isEmpty() && !baseId.isEmpty() && !needFallback) {
-			LOG(("AyuGram Language not found! Fallback to main language: %1...").arg(baseId));
+			LOG(("MediaTok Language not found! Fallback to main language: %1...").arg(baseId));
 			needFallback = true;
 			_chkReply->disconnect();
 			fetchLanguage("", baseId);
 		} else {
-			LOG(("AyuGram Language not found!"));
+			LOG(("MediaTok Language not found!"));
 			_chkReply = nullptr;
 		}
 	}
@@ -215,5 +227,9 @@ void AyuLanguage::applyLanguageJson(QJsonDocument doc) {
 		Lang::GetInstance().resetValue(key.toUtf8());
 		Lang::GetInstance().applyValue(key.toUtf8(), val.toUtf8());
 	}
+	Lang::GetInstance().resetValue("ayu_SettingsWatermark");
+	Lang::GetInstance().applyValue(
+		"ayu_SettingsWatermark",
+		QByteArray("MediaTok — независимый клиент с AI, медиа и приватностью."));
 	Lang::GetInstance().updatePluralRules();
 }

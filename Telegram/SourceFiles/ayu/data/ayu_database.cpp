@@ -10,6 +10,8 @@
 #include "ayu/libs/sqlite/sqlite_orm.h"
 #include "base/unixtime.h"
 
+#include <QtCore/QFile>
+
 #include <mutex>
 
 using namespace sqlite_orm;
@@ -17,7 +19,7 @@ using namespace sqlite_orm;
 std::mutex databaseMutex;
 
 auto storage = make_storage(
-	"./tdata/ayudata.db",
+	"./tdata/mediatok.db",
 	make_table<SchemaVersion>(
 		"SchemaVersion",
 		make_column("id", &SchemaVersion::id, primary_key()),
@@ -216,21 +218,36 @@ namespace AyuDatabase {
 void moveCurrentDatabase() {
 	const auto time = base::unixtime::now();
 
-	if (QFile::exists("./tdata/ayudata.db")) {
-		QFile::rename("./tdata/ayudata.db", QString("./tdata/ayudata_%1.db").arg(time));
+	if (QFile::exists("./tdata/mediatok.db")) {
+		QFile::rename("./tdata/mediatok.db", QString("./tdata/mediatok_%1.db").arg(time));
 	}
 
-	if (QFile::exists("./tdata/ayudata.db-shm")) {
-		QFile::rename("./tdata/ayudata.db-shm", QString("./tdata/ayudata_%1.db-shm").arg(time));
+	if (QFile::exists("./tdata/mediatok.db-shm")) {
+		QFile::rename("./tdata/mediatok.db-shm", QString("./tdata/mediatok_%1.db-shm").arg(time));
 	}
 
-	if (QFile::exists("./tdata/ayudata.db-wal")) {
-		QFile::rename("./tdata/ayudata.db-wal", QString("./tdata/ayudata_%1.db-wal").arg(time));
+	if (QFile::exists("./tdata/mediatok.db-wal")) {
+		QFile::rename("./tdata/mediatok.db-wal", QString("./tdata/mediatok_%1.db-wal").arg(time));
+	}
+}
+
+void migrateLegacyDatabaseIfNeeded() {
+	if (QFile::exists("./tdata/mediatok.db") || !QFile::exists("./tdata/ayudata.db")) {
+		return;
+	}
+	if (QFile::rename("./tdata/ayudata.db", "./tdata/mediatok.db")) {
+		if (QFile::exists("./tdata/ayudata.db-shm") && !QFile::exists("./tdata/mediatok.db-shm")) {
+			QFile::rename("./tdata/ayudata.db-shm", "./tdata/mediatok.db-shm");
+		}
+		if (QFile::exists("./tdata/ayudata.db-wal") && !QFile::exists("./tdata/mediatok.db-wal")) {
+			QFile::rename("./tdata/ayudata.db-wal", "./tdata/mediatok.db-wal");
+		}
 	}
 }
 
 void initialize() {
 	std::lock_guard lock(databaseMutex);
+	migrateLegacyDatabaseIfNeeded();
 	try {
 		storage.sync_schema(true);
 

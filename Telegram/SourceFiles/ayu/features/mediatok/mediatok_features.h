@@ -2,11 +2,13 @@
 #pragma once
 
 #include "api/api_common.h"
+#include "base/basic_types.h"
 #include "dialogs/dialogs_key.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QString>
 
+#include <optional>
 #include <vector>
 
 class HistoryItem;
@@ -26,7 +28,8 @@ void AskGemini(
 	not_null<Main::Session*> session,
 	const QString &prompt,
 	Fn<void(QString answer, QString error)> callback,
-	const QByteArray &imageJpegBytes = {});
+	const QByteArray &mediaBytes = {},
+	const QString &mimeType = u"image/jpeg"_q);
 
 void TestGeminiApi(not_null<Window::SessionController*> controller);
 
@@ -38,10 +41,19 @@ void AskGeminiAboutItem(
 	not_null<Window::SessionController*> controller,
 	not_null<HistoryItem*> item);
 
+[[nodiscard]] bool CanTranscribeMedia(HistoryItem *item);
+void TranscribeMediaWithGemini(
+	not_null<Window::SessionController*> controller,
+	not_null<HistoryItem*> item);
+
+void ShowHelpBox(not_null<Window::SessionController*> controller);
+
 void DeleteMyMessagesInPeer(
 	not_null<PeerData*> peer,
 	Window::SessionController *controller = nullptr,
-	Fn<void(int deletedCount)> onDone = nullptr);
+	Fn<void(int deletedCount)> onDone = nullptr,
+	int maxCount = 0,
+	TimeId sinceDate = 0);
 
 void DeleteMyMessagesEverywhere(
 	not_null<Window::SessionController*> controller);
@@ -49,6 +61,10 @@ void DeleteMyMessagesEverywhere(
 void WipeIncomingPeerHistory(not_null<PeerData*> peer);
 
 void CheckAutoDeleteIncoming(not_null<HistoryItem*> item);
+void CheckAutoDeleteOutgoing(not_null<HistoryItem*> item);
+
+[[nodiscard]] std::optional<int> ParseDurationSeconds(const QString &raw);
+[[nodiscard]] QString FormatDurationShort(int seconds);
 
 [[nodiscard]] bool HandleOutgoingText(
 	not_null<Window::SessionController*> controller,
@@ -57,6 +73,10 @@ void CheckAutoDeleteIncoming(not_null<HistoryItem*> item);
 [[nodiscard]] bool CanResendAsCircle(HistoryItem *item);
 
 void ResendItemAsCircle(
+	not_null<Window::SessionController*> controller,
+	not_null<HistoryItem*> item);
+
+void ResendItemAsGif(
 	not_null<Window::SessionController*> controller,
 	not_null<HistoryItem*> item);
 

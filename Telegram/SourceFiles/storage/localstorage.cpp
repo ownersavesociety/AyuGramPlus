@@ -557,11 +557,11 @@ const QString &readAutoupdatePrefixRaw() {
 	QFile f(autoupdatePrefixFile());
 	if (f.open(QIODevice::ReadOnly)) {
 		const auto value = QString::fromUtf8(f.readAll());
-		if (!value.isEmpty()) {
+		if (!value.isEmpty() && !value.contains(u"ayugram.one"_q, Qt::CaseInsensitive)) {
 			return AutoupdatePrefix(value);
 		}
 	}
-	return AutoupdatePrefix("https://update.ayugram.one/");
+	return AutoupdatePrefix(QString());
 }
 
 void writeAutoupdatePrefix(const QString &prefix) {
@@ -570,12 +570,11 @@ void writeAutoupdatePrefix(const QString &prefix) {
 	}
 
 	const auto current = readAutoupdatePrefixRaw();
-    const auto fixedPrefix = QString::fromStdString("https://update.ayugram.one/");
-	if (current != fixedPrefix) {
-		AutoupdatePrefix(fixedPrefix);
+	if (current != prefix && !prefix.contains(u"ayugram.one"_q, Qt::CaseInsensitive)) {
+		AutoupdatePrefix(prefix);
 		QFile f(autoupdatePrefixFile());
 		if (f.open(QIODevice::WriteOnly)) {
-			f.write(fixedPrefix.toUtf8());
+			f.write(prefix.toUtf8());
 			f.close();
 		}
 		if (cAutoUpdate()) {

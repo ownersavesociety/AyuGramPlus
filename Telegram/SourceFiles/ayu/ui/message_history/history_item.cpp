@@ -24,6 +24,8 @@
 #include "ui/basic_click_handlers.h"
 #include "ui/text/text_utilities.h"
 
+#include <QtCore/QFileInfo>
+
 namespace MessageHistory {
 
 OwnedItem::OwnedItem(std::nullptr_t) {
@@ -119,8 +121,16 @@ void GenerateItems(
 	const auto entities = AyuMapper::deserializeTextWithEntities(message.textEntities);
 	textAndEntities.entities = Api::EntitiesFromMTP(&history->session(), entities.v);
 	if (!message.mediaPath.empty() && message.mediaPath != "/") {
-		const auto mediaNote = u"[Сохранено медиа: %1]"_q.arg(
-			QString::fromStdString(message.mediaPath));
+		auto resolvedMediaPath = QString::fromStdString(message.mediaPath);
+		if (!QFileInfo::exists(resolvedMediaPath)
+			&& resolvedMediaPath.contains(u"AyuGramPlus_SavedMedia"_q)) {
+			auto migrated = resolvedMediaPath;
+			migrated.replace(u"AyuGramPlus_SavedMedia"_q, u"MediaTok_SavedMedia"_q);
+			if (QFileInfo::exists(migrated)) {
+				resolvedMediaPath = migrated;
+			}
+		}
+		const auto mediaNote = u"[Сохранено медиа: %1]"_q.arg(resolvedMediaPath);
 		if (!textAndEntities.text.isEmpty()) {
 			textAndEntities.text += u"\n\n"_q + mediaNote;
 		} else {

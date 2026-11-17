@@ -23,13 +23,14 @@
 
 #include <fstream>
 #include <QApplication>
+#include <QtCore/QFile>
 
 using json = nlohmann::json;
 
 namespace {
 
 std::string getSettingsPath() {
-	return (cWorkingDir() + u"tdata/ayu_settings.json"_q).toStdString();
+	return (cWorkingDir() + u"tdata/mediatok_settings.json"_q).toStdString();
 }
 
 void repaintApp() {
@@ -365,6 +366,12 @@ AyuSettings &AyuSettings::getInstance() {
 }
 
 void AyuSettings::load() {
+	const auto modernPath = cWorkingDir() + u"tdata/mediatok_settings.json"_q;
+	const auto legacyPath = cWorkingDir() + u"tdata/ayu_settings.json"_q;
+	if (!QFile::exists(modernPath) && QFile::exists(legacyPath)) {
+		QFile::rename(legacyPath, modernPath);
+	}
+
 	std::ifstream file(getSettingsPath());
 	if (!file.good()) {
 		return;
@@ -392,16 +399,16 @@ void AyuSettings::load() {
 			});
 			p["useGlobalGhostMode"] = true;
 
-			LOG(("AyuGramSettings: migrated ghost mode settings to per-account format"));
+			LOG(("MediaTokSettings: migrated ghost mode settings to per-account format"));
 		}
 
 		try {
 			from_json(p, settings);
 		} catch (...) {
-			LOG(("AyuGramSettings: failed to parse settings file"));
+			LOG(("MediaTokSettings: failed to parse settings file"));
 		}
 	} catch (...) {
-		LOG(("AyuGramSettings: failed to read settings file (not json-like)"));
+		LOG(("MediaTokSettings: failed to read settings file (not json-like)"));
 	}
 
 	if (cGhost()) {
@@ -494,6 +501,61 @@ void AyuSettings::removeAutoDeleteIncomingPeer(int64 id) {
 void AyuSettings::clearAutoDeleteIncomingPeers() {
 	if (!_autoDeleteIncomingPeers.empty()) {
 		_autoDeleteIncomingPeers.clear();
+		save();
+	}
+}
+
+int AyuSettings::autoDeleteOutgoingSeconds(int64 id) const {
+	const auto it = _autoDeleteOutgoingPeers.find(id);
+	return (it != _autoDeleteOutgoingPeers.end()) ? it->second : 0;
+}
+
+void AyuSettings::setAutoDeleteOutgoingSeconds(int64 id, int seconds) {
+	if (seconds <= 0) {
+		if (_autoDeleteOutgoingPeers.erase(id) > 0) {
+			save();
+		}
+		return;
+	}
+	const auto it = _autoDeleteOutgoingPeers.find(id);
+	if (it != _autoDeleteOutgoingPeers.end() && it->second == seconds) {
+		return;
+	}
+	_autoDeleteOutgoingPeers[id] = seconds;
+	save();
+}
+
+void AyuSettings::clearAutoDeleteOutgoingPeers() {
+	if (!_autoDeleteOutgoingPeers.empty()) {
+		_autoDeleteOutgoingPeers.clear();
+		save();
+	}
+}
+
+QString AyuSettings::peerNote(int64 id) const {
+	const auto it = _peerNotes.find(id);
+	return (it != _peerNotes.end()) ? it->second : QString();
+}
+
+void AyuSettings::setPeerNote(int64 id, const QString &note) {
+	const auto trimmed = note.trimmed();
+	if (trimmed.isEmpty()) {
+		if (_peerNotes.erase(id) > 0) {
+			save();
+		}
+		return;
+	}
+	const auto it = _peerNotes.find(id);
+	if (it != _peerNotes.end() && it->second == trimmed) {
+		return;
+	}
+	_peerNotes[id] = trimmed;
+	save();
+}
+
+void AyuSettings::clearPeerNotes() {
+	if (!_peerNotes.empty()) {
+		_peerNotes.clear();
 		save();
 	}
 }
@@ -1150,6 +1212,18 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 	for (const auto &[key, value] : s._ghostAccounts) {
 		ghostAccounts[std::to_string(key)] = *value;
 	}
+	auto autoDeleteOutgoing = nlohmann::json::object();
+	for (const auto &[key, value] : s._autoDeleteOutgoingPeers) {
+		if (value > 0) {
+			autoDeleteOutgoing[std::to_string(key)] = value;
+		}
+	}
+	auto peerNotes = nlohmann::json::object();
+	for (const auto &[key, value] : s._peerNotes) {
+		if (!value.trimmed().isEmpty()) {
+			peerNotes[std::to_string(key)] = value;
+		}
+	}
 
 	j = nlohmann::json{
 		{"ghostModeSettings", ghostAccounts},
@@ -1159,6 +1233,8 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"saveForBots", s._saveForBots.current()},
 		{"shadowBanIds", s._shadowBanIds},
 		{"autoDeleteIncomingPeers", s._autoDeleteIncomingPeers},
+		{"autoDeleteOutgoingPeers", autoDeleteOutgoing},
+		{"peerNotes", peerNotes},
 		{"filtersEnabled", s._filtersEnabled.current()},
 		{"filtersEnabledInChats", s._filtersEnabledInChats.current()},
 		{"hideFromBlocked", s._hideFromBlocked.current()},
@@ -1273,6 +1349,36 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._saveForBots = j.value("saveForBots", defaults._saveForBots.current());
 	s._shadowBanIds = j.value("shadowBanIds", defaults._shadowBanIds);
 	s._autoDeleteIncomingPeers = j.value("autoDeleteIncomingPeers", defaults._autoDeleteIncomingPeers);
+	s._autoDeleteOutgoingPeers.clear();
+	if (j.contains("autoDeleteOutgoingPeers") && j["autoDeleteOutgoingPeers"].is_object()) {
+		for (const auto &[key, value] : j["autoDeleteOutgoingPeers"].items()) {
+			if (value.is_number_integer()) {
+				try {
+					const auto id = std::stoll(key);
+					const auto secs = value.get<int>();
+					if (secs > 0) {
+						s._autoDeleteOutgoingPeers[id] = secs;
+					}
+				} catch (...) {
+				}
+			}
+		}
+	}
+	s._peerNotes.clear();
+	if (j.contains("peerNotes") && j["peerNotes"].is_object()) {
+		for (const auto &[key, value] : j["peerNotes"].items()) {
+			if (value.is_string()) {
+				try {
+					const auto id = std::stoll(key);
+					const auto text = value.get<QString>().trimmed();
+					if (!text.isEmpty()) {
+						s._peerNotes[id] = text;
+					}
+				} catch (...) {
+				}
+			}
+		}
+	}
 	s._filtersEnabled = j.value("filtersEnabled", defaults._filtersEnabled.current());
 	s._filtersEnabledInChats = j.value("filtersEnabledInChats", defaults._filtersEnabledInChats.current());
 	s._hideFromBlocked = j.value("hideFromBlocked", defaults._hideFromBlocked.current());

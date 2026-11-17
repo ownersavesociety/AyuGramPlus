@@ -206,7 +206,7 @@ void BuildGeminiSection(SectionBuilder &builder) {
 
 	builder.addSkip();
 	builder.addDividerText(rpl::single(
-		u"В любом чате, теме и комментариях: .ai <вопрос> (понимает текст и фото в реплае) или .ai! <вопрос> (ответ только вам)."_q));
+		u"В любом чате: .ai / .ai! (видит цепочку реплаев, фото и аудио), .tldr [N] (выжимка), .tr <язык>, .fix, .tone <стиль>. На ГС/кружках работает «Расшифровать (AI)»."_q));
 	builder.addSkip();
 }
 
@@ -304,6 +304,8 @@ void BuildVoicemodSection(SectionBuilder &builder) {
 void BuildCleanupSection(SectionBuilder &builder) {
 	const auto controller = builder.controller();
 	const auto wipeRefresh = std::make_shared<rpl::event_stream<>>();
+	const auto autoDelRefresh = std::make_shared<rpl::event_stream<>>();
+	const auto notesRefresh = std::make_shared<rpl::event_stream<>>();
 
 	builder.addSubsectionTitle(rpl::single(u"Очистка и авто-удаление в ЛС"_q));
 
@@ -314,6 +316,23 @@ void BuildCleanupSection(SectionBuilder &builder) {
 		.onClick = [=] {
 			if (controller) {
 				MediaTok::DeleteMyMessagesEverywhere(controller);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/clearAutoDelList"_q,
+		.title = rpl::single(u"Сбросить таймеры .autodel"_q),
+		.icon = { &st::menuIconTimer },
+		.label = autoDelRefresh->events_starting_with({}) | rpl::map([] {
+			return u"%1 чатов"_q.arg(
+				AyuSettings::getInstance().autoDeleteOutgoingPeers().size());
+		}),
+		.onClick = [=] {
+			AyuSettings::getInstance().clearAutoDeleteOutgoingPeers();
+			autoDelRefresh->fire({});
+			if (controller) {
+				controller->showToast(u"MediaTok: все таймеры .autodel сброшены"_q);
 			}
 		},
 	});
@@ -335,14 +354,37 @@ void BuildCleanupSection(SectionBuilder &builder) {
 		},
 	});
 
+	builder.addButton({
+		.id = u"mediatok/clearPeerNotes"_q,
+		.title = rpl::single(u"Очистить личные заметки о контактах"_q),
+		.icon = { &st::menuIconEdit },
+		.label = notesRefresh->events_starting_with({}) | rpl::map([] {
+			return u"%1 заметок"_q.arg(
+				AyuSettings::getInstance().peerNotes().size());
+		}),
+		.onClick = [=] {
+			AyuSettings::getInstance().clearPeerNotes();
+			notesRefresh->fire({});
+			if (controller) {
+				controller->showToast(u"MediaTok: личные заметки очищены"_q);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/showHelp"_q,
+		.title = rpl::single(u"Шпаргалка по всем командам (.mt)"_q),
+		.icon = { &st::menuIconInfo },
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowHelpBox(controller);
+			}
+		},
+	});
+
 	builder.addSkip();
 	builder.addDividerText(rpl::single(
-		u"Команды в чатах (.mt для справки):\n"
-		"• .ai <текст> / .ai! <текст> — Gemini ИИ (включая анализ фото в реплае)\n"
-		"• .circle <ссылка> — скачать видео по ссылке и отправить КРУЖКОМ (или реплаем .circle на видео/GIF)\n"
-		"• .dl <ссылка> / .raw <текст> — скачать видео / отправить текст без скачивания\n"
-		"• .delme / .delmeall — удалить ваши сообщения (в чате / во всех чатах)\n"
-		"• .wipe / .wipe all / .unwipe — тихо сносить входящие от собеседника в ЛС для обоих"_q));
+		u"Команды (.mt): .ai/.ai!, .tldr [N], .tr <яз>, .fix, .tone <стиль>, .circle/.gif/.voice/.mp3/.dl [таймкод] [скорость x], .delme [N|период], .autodel <время>, .wipe/.unwipe, .vm."_q));
 	builder.addSkip();
 }
 

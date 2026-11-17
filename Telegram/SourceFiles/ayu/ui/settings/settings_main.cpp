@@ -9,6 +9,7 @@
 #include "settings/sections/settings_main.h"
 #include "lang_auto.h"
 #include "ayu/ayu_settings.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/ui/ayu_logo.h"
 #include "ayu/ui/settings/settings_appearance.h"
 #include "ayu/ui/settings/settings_ayu.h"
@@ -143,50 +144,39 @@ void BuildLinks(SectionBuilder &builder) {
 	builder.addDivider();
 	builder.addSkip();
 
-	builder.addSubsectionTitle(tr::ayu_LinksHeader());
+	builder.addSubsectionTitle(rpl::single(u"MediaTok"_q));
 
 	const auto controller = builder.controller();
 
 	builder.addButton({
-		.id = u"ayu/channel"_q,
-		.title = tr::ayu_LinksChannel(),
+		.id = u"mediatok/help"_q,
+		.title = rpl::single(u"Справка по командам (.mt)"_q),
+		.icon = { &st::menuIconInfo },
+		.label = rpl::single(u"Открыть"_q),
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowHelpBox(controller);
+			}
+		},
+	});
+	builder.addButton({
+		.id = u"mediatok/github"_q,
+		.title = rpl::single(u"Репозиторий MediaTok"_q),
 		.icon = { &st::menuIconChannel },
-		.label = rpl::single(QString("@ayugram")),
-		.onClick = [=] {
-			controller->showPeerByLink(Window::PeerByLinkInfo{
-				.usernameOrId = QString("ayugram"),
-			});
-		},
-	});
-	builder.addButton({
-		.id = u"ayu/chat"_q,
-		.title = tr::ayu_LinksChats(),
-		.icon = { &st::menuIconChats },
-		.label = rpl::single(QString("@ayugramchat")),
-		.onClick = [=] {
-			controller->showPeerByLink(Window::PeerByLinkInfo{
-				.usernameOrId = QString("ayugramchat"),
-			});
-		},
-	});
-	builder.addButton({
-		.id = u"ayu/crowdin"_q,
-		.title = tr::ayu_LinksTranslate(),
-		.icon = { &st::menuIconTranslate },
-		.label = rpl::single(QString("Crowdin")),
+		.label = rpl::single(QString("GitHub")),
 		.onClick = [=] {
 			QDesktopServices::openUrl(
-				QString("https://translate.ayugram.one"));
+				QString("https://github.com/ownersavesociety/AyuGramPlus"));
 		},
 	});
 	builder.addButton({
-		.id = u"ayu/website"_q,
-		.title = tr::ayu_LinksDocumentation(),
-		.icon = { &st::menuIconIpAddress },
-		.label = rpl::single(QString("docs.ayugram.one")),
+		.id = u"mediatok/releases"_q,
+		.title = rpl::single(u"Релизы и обновления"_q),
+		.icon = { &st::menuIconArchive },
+		.label = rpl::single(QString("Releases")),
 		.onClick = [=] {
 			QDesktopServices::openUrl(
-				QString("https://docs.ayugram.one"));
+				QString("https://github.com/ownersavesociety/AyuGramPlus/releases"));
 		},
 	});
 

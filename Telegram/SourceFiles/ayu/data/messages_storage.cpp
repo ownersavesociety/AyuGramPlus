@@ -54,11 +54,25 @@ QString resolveMediaExtension(DocumentData *document) {
 	return u".bin"_q;
 }
 
+void ensureSavedMediaDirMigrated() {
+	static bool checked = false;
+	if (checked) {
+		return;
+	}
+	checked = true;
+	const auto legacyPath = u"./tdata/AyuGramPlus_SavedMedia"_q;
+	const auto modernPath = u"./tdata/MediaTok_SavedMedia"_q;
+	if (!QDir(modernPath).exists() && QDir(legacyPath).exists()) {
+		QDir().rename(legacyPath, modernPath);
+	}
+}
+
 QString buildSavedMediaPath(not_null<HistoryItem*> item, bool isTtl) {
+	ensureSavedMediaDirMigrated();
 	const auto dialogId = getDialogIdFromPeer(item->history()->peer);
 	const auto folder = isTtl
-		? u"./tdata/AyuGramPlus_SavedMedia/ttl/chat_%1"_q.arg(dialogId)
-		: u"./tdata/AyuGramPlus_SavedMedia/deleted/chat_%1"_q.arg(dialogId);
+		? u"./tdata/MediaTok_SavedMedia/ttl/chat_%1"_q.arg(dialogId)
+		: u"./tdata/MediaTok_SavedMedia/deleted/chat_%1"_q.arg(dialogId);
 	QDir().mkpath(folder);
 
 	const auto media = item->media();

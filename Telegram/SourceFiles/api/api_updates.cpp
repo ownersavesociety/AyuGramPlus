@@ -76,6 +76,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_worker.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 
 
 namespace Api {
@@ -1595,6 +1596,7 @@ void Updates::applyUpdates(
 			if (const auto item = lookupMessage()) {
 				_session->data().fillMessagePeers(item->fullId(), d);
 				item->applySentMessage(sent.text, d, wasAlready);
+				MediaTok::CheckAutoDeleteOutgoing(item);
 			}
 		}
 

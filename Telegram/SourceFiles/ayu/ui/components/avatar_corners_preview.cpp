@@ -10,6 +10,7 @@
 #include "data/data_peer.h"
 #include "data/data_peer_id.h"
 #include "data/data_session.h"
+#include "data/data_user.h"
 #include "main/main_session.h"
 #include "styles/style_ayu_icons.h"
 #include "styles/style_dialogs.h"
@@ -28,9 +29,10 @@ AvatarCornersPreview::AvatarCornersPreview(
 , _controller(controller)
 , _emptyUserpic(
 	Ui::EmptyUserpic::UserpicColor(
-		Data::DecideColorIndex(
-			peerFromChannel(ChannelId(2331068091)))),
-	u"AyuGram Releases"_q) {
+		Data::DecideColorIndex(controller->session().user()->id)),
+	controller->session().user()->name().isEmpty()
+		? u"MediaTok"_q
+		: controller->session().user()->name()) {
 	const auto &row = st::defaultDialogRow;
 	setFixedHeight(row.height);
 	setCursor(Qt::PointingHandCursor);
@@ -63,18 +65,16 @@ void AvatarCornersPreview::paintEvent(QPaintEvent *e) {
 		_emptyUserpic.paintCircle(p, userpicX, userpicY, width(), photoSize);
 	}
 
-	const auto nameText = u"AyuGram Releases"_q;
+	const auto nameText = (_peer && !_peer->name().isEmpty())
+		? _peer->name()
+		: u"MediaTok Preview"_q;
 	p.setPen(st::dialogsNameFg);
 	p.setFont(st::semiboldFont);
 	p.drawText(row.nameLeft + xShift, row.nameTop + st::semiboldFont->ascent, nameText);
 
-	const auto nameWidth = st::semiboldFont->width(nameText);
-	const auto &badge = st::dialogsExteraOfficialIcon.icon;
-	badge.paint(p, row.nameLeft + xShift + nameWidth, row.nameTop, width());
-
 	p.setPen(st::dialogsTextFg);
 	p.setFont(st::dialogsTextFont);
-	p.drawText(row.textLeft + xShift, row.textTop + st::dialogsTextFont->ascent, u"Better late than never"_q);
+	p.drawText(row.textLeft + xShift, row.textTop + st::dialogsTextFont->ascent, u"Скругление аватаров MediaTok"_q);
 }
 
 void AvatarCornersPreview::mousePressEvent(QMouseEvent *e) {
@@ -94,39 +94,18 @@ void AvatarCornersPreview::mouseReleaseEvent(QMouseEvent *e) {
 	if (_ripple) {
 		_ripple->lastStop();
 	}
-	if (e->button() == Qt::LeftButton && rect().contains(e->pos())) {
-		_controller->showPeerByLink(Window::PeerByLinkInfo{
-			.usernameOrId = u"AyuGramReleases"_q,
-		});
+	if (e->button() == Qt::LeftButton && rect().contains(e->pos()) && _peer) {
+		_controller->showPeerInfo(_peer);
 	}
 }
 
 void AvatarCornersPreview::resolveChannel() {
-	const auto session = &_controller->session();
-	_peer = session->data().peerByUsername(u"AyuGramReleases"_q);
+	_peer = _controller->session().user();
 	if (_peer) {
 		_peer->loadUserpic();
 		subscribeToUpdates();
-		return;
 	}
-	const auto weak = base::make_weak(this);
-	session->api().request(MTPcontacts_ResolveUsername(
-		MTP_flags(0),
-		MTP_string(u"AyuGramReleases"_q),
-		MTP_string()
-	)).done([=](const MTPcontacts_ResolvedPeer &result) {
-		if (const auto strong = weak.get()) {
-			session->data().processUsers(result.data().vusers());
-			session->data().processChats(result.data().vchats());
-			strong->_peer = session->data().peerLoaded(
-				peerFromMTP(result.data().vpeer()));
-			if (strong->_peer) {
-				strong->_peer->loadUserpic();
-				strong->subscribeToUpdates();
-			}
-			strong->update();
-		}
-	}).send();
+	update();
 }
 
 void AvatarCornersPreview::subscribeToUpdates() {

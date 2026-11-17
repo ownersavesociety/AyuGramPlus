@@ -118,7 +118,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QClipboard>
 
 // AyuGram includes
+#include "ayu/ayu_settings.h"
 #include "ayu/features/mediatok/mediatok_features.h"
+#include "ayu/ui/boxes/edit_mark_box.h"
 #include "ayu/ui/utils/ayu_profile_values.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "styles/style_ayu_styles.h"
@@ -3358,6 +3360,38 @@ void ActionsFiller::fillUserActions(not_null<UserData*> user) {
 	}
 	addShareContactAction(user);
 	if (!user->isSelf()) {
+		if (const auto controller = _controller->parentController()) {
+			const auto dialogId = getDialogIdFromPeer(user);
+			const auto noteRefresh = std::make_shared<rpl::event_stream<>>();
+			const auto weak = base::make_weak(controller);
+			auto noteLabel = noteRefresh->events_starting_with({}) | rpl::map([dialogId] {
+				const auto note = AyuSettings::getInstance().peerNote(dialogId);
+				if (note.isEmpty()) {
+					return u"Личная заметка MediaTok"_q;
+				}
+				return u"Заметка: %1"_q.arg(
+					note.size() > 24 ? note.left(24) + u"..."_q : note);
+			});
+			AddActionButton(
+				_wrap,
+				std::move(noteLabel),
+				rpl::single(true),
+				[=] {
+					const auto strong = weak.get();
+					if (!strong) {
+						return;
+					}
+					strong->show(Box<EditMarkBox>(
+						rpl::single(u"Личная заметка (%1)"_q.arg(user->name())),
+						AyuSettings::getInstance().peerNote(dialogId),
+						QString(),
+						[=](const QString &value) {
+							AyuSettings::getInstance().setPeerNote(dialogId, value);
+							noteRefresh->fire({});
+						}));
+				},
+				&st::menuIconEdit);
+		}
 		addEditContactAction(user);
 		addDeleteContactAction(user);
 	}

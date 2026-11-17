@@ -18,6 +18,7 @@
 #include "ayu/features/forward/ayu_forward_rich.h"
 #include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/ui/context_menu/menu_item_subtext.h"
+#include "ayu/ui/boxes/edit_mark_box.h"
 #include "ayu/ui/message_history/history_section.h"
 #include "ayu/ui/settings/filters/edit_filter.h"
 #include "ayu/ui/settings/filters/settings_filters_list.h"
@@ -272,12 +273,7 @@ void AddAyuGramActions(PeerData *peerData,
 	const auto canSearchMyMessages = MediaTok::CanSearchUserMessagesInChat(
 		searchKey,
 		selfUser);
-	if (!showFilters
-		&& !saveDeletedMessages
-		&& !isPrivateOther
-		&& !canSearchMyMessages) {
-		return;
-	}
+	const auto dialogId = getDialogIdFromPeer(peerData);
 
 	addCallback(Window::PeerMenuCallback::Args{
 		.text = u"MediaTok"_q,
@@ -345,7 +341,6 @@ void AddAyuGramActions(PeerData *peerData,
 				});
 			}
 			if (isPrivateOther) {
-				const auto dialogId = getDialogIdFromPeer(peerData);
 				const auto wiping = AyuSettings::getInstance().isAutoDeleteIncomingPeer(dialogId);
 				if (canSearchMyMessages || showFilters || saveDeletedMessages || filteredToggleShown.value_or(false)) {
 					addAction({ .isSeparator = true });
@@ -387,6 +382,37 @@ void AddAyuGramActions(PeerData *peerData,
 					.isAttention = true,
 				});
 			}
+			const auto autoDelSecs = AyuSettings::getInstance().autoDeleteOutgoingSeconds(dialogId);
+			addAction({ .isSeparator = true });
+			addAction(
+				u"Авто-удаление моих: %1"_q.arg(MediaTok::FormatDurationShort(autoDelSecs)),
+				[=] {
+					const auto current = AyuSettings::getInstance().autoDeleteOutgoingSeconds(dialogId);
+					const auto initial = (current > 0) ? QString::number(current) + u"s"_q : u"30s"_q;
+					sessionController->show(Box<EditMarkBox>(
+						rpl::single(u"Таймер .autodel (напр. 30s, 5m, 2h или off)"_q),
+						initial,
+						u"off"_q,
+						[=](const QString &value) {
+							if (const auto secs = MediaTok::ParseDurationSeconds(value)) {
+								AyuSettings::getInstance().setAutoDeleteOutgoingSeconds(dialogId, *secs);
+								sessionController->showToast(
+									*secs > 0
+										? u"MediaTok: авто-удаление ваших сообщений через %1"_q.arg(
+											MediaTok::FormatDurationShort(*secs))
+										: u"MediaTok: .autodel ВЫКЛ"_q);
+							} else {
+								sessionController->showToast(u"Неверный формат (пример: 30s, 5m, 2h, off)"_q);
+							}
+						}));
+				},
+				&st::menuIconTimer);
+			addAction(
+				u"Справка команд (.mt)"_q,
+				[=] {
+					MediaTok::ShowHelpBox(sessionController);
+				},
+				&st::menuIconInfo);
 		},
 	});
 }
@@ -1113,14 +1139,34 @@ void AddAskGeminiAction(
 	if (!item || !item->isRegular() || item->isLocal()) {
 		return;
 	}
+	const bool canTranscribe = MediaTok::CanTranscribeMedia(item);
 	const bool hasText = !item->originalText().text.trimmed().isEmpty();
-	const bool hasPhoto = item->media() && item->media()->photo();
-	if (!hasText && !hasPhoto) {
-		return;
-	}
+	const auto media = item->media();
+	const auto doc = media ? media->document() : nullptr;
+	const bool hasPhotoOrMedia = media && (
+		media->photo()
+		|| canTranscribe
+		|| (doc && (doc->isAudioFile() || doc->isSong() || doc->isVideoFile())));
 	const auto weak = base::make_weak(controller);
 	const auto itemId = item->fullId();
 	const auto owner = &item->history()->owner();
+	if (canTranscribe) {
+		menu->addAction(
+			u"Расшифровать (AI)"_q,
+			[=] {
+				const auto strong = weak.get();
+				if (!strong) {
+					return;
+				}
+				if (const auto current = owner->message(itemId)) {
+					MediaTok::TranscribeMediaWithGemini(strong, current);
+				}
+			},
+			&st::menuIconEdit);
+	}
+	if (!hasText && !hasPhotoOrMedia) {
+		return;
+	}
 	menu->addAction(
 		u"Спросить Gemini (.ai)"_q,
 		[=] {
@@ -1139,24 +1185,51 @@ void AddResendAsCircleAction(
 		not_null<Ui::PopupMenu*> menu,
 		not_null<Window::SessionController*> controller,
 		HistoryItem *item) {
-	if (!MediaTok::CanResendAsCircle(item)) {
+	if (!item || !item->isRegular() || item->isLocal()) {
+		return;
+	}
+	const auto media = item->media();
+	const auto doc = media ? media->document() : nullptr;
+	const bool canCircle = MediaTok::CanResendAsCircle(item);
+	const bool canGif = doc && (
+		doc->isVideoFile()
+		|| doc->isVideoMessage()
+		|| doc->isAnimation()
+		|| doc->isGifv());
+	if (!canCircle && !canGif) {
 		return;
 	}
 	const auto weak = base::make_weak(controller);
 	const auto itemId = item->fullId();
 	const auto owner = &item->history()->owner();
-	menu->addAction(
-		u"Отправить кружком"_q,
-		[=] {
-			const auto strong = weak.get();
-			if (!strong) {
-				return;
-			}
-			if (const auto current = owner->message(itemId)) {
-				MediaTok::ResendItemAsCircle(strong, current);
-			}
-		},
-		&st::menuIconTTLAny);
+	if (canCircle) {
+		menu->addAction(
+			u"Отправить кружком"_q,
+			[=] {
+				const auto strong = weak.get();
+				if (!strong) {
+					return;
+				}
+				if (const auto current = owner->message(itemId)) {
+					MediaTok::ResendItemAsCircle(strong, current);
+				}
+			},
+			&st::menuIconTTLAny);
+	}
+	if (canGif) {
+		menu->addAction(
+			u"Отправить как GIF"_q,
+			[=] {
+				const auto strong = weak.get();
+				if (!strong) {
+					return;
+				}
+				if (const auto current = owner->message(itemId)) {
+					MediaTok::ResendItemAsGif(strong, current);
+				}
+			},
+			&st::menuIconGif);
+	}
 }
 
 void AddCreateFilterAction(not_null<Ui::PopupMenu*> menu,

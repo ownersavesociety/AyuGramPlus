@@ -91,13 +91,11 @@ void AboutBox(not_null<Ui::GenericBox*> box, Window::SessionController* controll
 
 	box->addButton(tr::lng_close(), [=] { box->closeBox(); });
 	box->addLeftButton(
-		rpl::single(QString("@AyuGramReleases")),
-		[box, controller]
+		rpl::single(QString("GitHub (MediaTok)")),
+		[box]
 		{
 			box->closeBox();
-			controller->showPeerByLink(Window::PeerByLinkInfo{
-				.usernameOrId = QString("ayugramreleases"),
-			});
+			File::OpenUrl(u"https://github.com/ownersavesociety/AyuGramPlus"_q);
 		});
 
 	box->setWidth(st::aboutWidth);
