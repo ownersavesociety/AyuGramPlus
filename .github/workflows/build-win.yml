@@ -1,10 +1,13 @@
-name: Build Windows x64 (AyuGram Plus)
+name: Build Windows x64 (MediaTok)
+
+permissions:
+  contents: write
 
 on:
   workflow_dispatch:
     inputs:
       build_config:
-        description: 'Build configuration (Debug is recommended for GitHub Actions free runners)'
+        description: 'Build configuration (Release for public distribution, Debug for fast tests)'
         required: true
         default: 'Debug'
         type: choice
@@ -68,8 +71,8 @@ jobs:
           echo "$BUILD_CONFIG" >> CACHE_KEY.txt
           echo "CACHE_KEY=$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')" >> $GITHUB_ENV
 
-          git config --global user.email "builder@ayugram-plus.local"
-          git config --global user.name "AyuGram Plus Builder"
+          git config --global user.email "builder@mediatok.local"
+          git config --global user.name "MediaTok Builder"
 
       - uses: Eden-CI/msvc-dev-cmd@master
         name: Initialize MSVC x64 Native Tools Command Prompt
@@ -144,7 +147,7 @@ jobs:
             ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
           key: ${{ runner.OS }}-x64-qt6-${{ env.CACHE_KEY }}
 
-      - name: Configure and Build AyuGram.exe
+      - name: Configure and Build MediaTok.exe
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram
 
@@ -165,13 +168,23 @@ jobs:
           set OUT=%TBUILD%\%REPO_NAME%\out\%BUILD_CONFIG%
           mkdir artifact
           if exist "%OUT%\MediaTok.exe" move "%OUT%\MediaTok.exe" artifact\
-          if exist "%OUT%\AyuGram.exe" move "%OUT%\AyuGram.exe" artifact\
           if exist "%OUT%\Telegram.exe" move "%OUT%\Telegram.exe" artifact\
           if exist "%OUT%\Updater.exe" move "%OUT%\Updater.exe" artifact\
 
-      - name: Upload AyuGram.exe Artifact
+      - name: Upload MediaTok Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AyuGramPlus-win64-${{ env.BUILD_CONFIG }}
+          name: MediaTok-win64-${{ env.BUILD_CONFIG }}
           path: artifact\
           retention-days: 14
+
+      - name: Publish Public Release (Release builds)
+        if: env.BUILD_CONFIG == 'Release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "win-release-$($env:GITHUB_RUN_NUMBER)"
+          $zipPath = "$env:RUNNER_TEMP\MediaTok-win64-Release.zip"
+          Compress-Archive -Path "artifact\*" -DestinationPath $zipPath -Force
+          gh release create $tag $zipPath --repo ${{ github.repository }} --target ${{ github.sha }} --title "MediaTok Windows x64 ($tag)" --notes "Public Windows x64 Release build of MediaTok (commit $($env:GITHUB_SHA.Substring(0,7))). Extract and run MediaTok.exe." --latest
