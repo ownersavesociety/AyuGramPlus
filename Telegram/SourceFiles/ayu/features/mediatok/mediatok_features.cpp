@@ -1058,7 +1058,7 @@ struct GeminiMediaBlob {
 [[nodiscard]] QString CollectReplyChainText(
 		not_null<History*> history,
 		FullMsgId replyId) {
-	std::vector<QString> chain;
+	QStringList chain;
 	auto curId = replyId;
 	for (int depth = 0; depth < 5 && curId; ++depth) {
 		const auto cur = history->owner().message(curId);
@@ -1094,7 +1094,7 @@ struct GeminiMediaBlob {
 [[nodiscard]] QString CollectRecentChatText(
 		not_null<History*> history,
 		int limit) {
-	std::vector<QString> lines;
+	QStringList lines;
 	lines.reserve(limit);
 	for (const auto &blockPtr : ranges::views::reverse(history->blocks)) {
 		for (const auto &viewPtr : ranges::views::reverse(blockPtr->messages)) {
@@ -1132,6 +1132,34 @@ struct GeminiMediaBlob {
 	}
 	std::reverse(lines.begin(), lines.end());
 	return lines.join(u"\n"_q);
+}
+
+std::vector<QString> SplitMessageChunks(const QString &text, int maxLen = 4000) {
+	std::vector<QString> chunks;
+	int pos = 0;
+	const int len = text.size();
+	while (pos < len) {
+		if (len - pos <= maxLen) {
+			chunks.push_back(text.mid(pos));
+			break;
+		}
+		int splitAt = text.lastIndexOf('\n', pos + maxLen);
+		if (splitAt <= pos + maxLen / 2) {
+			splitAt = text.lastIndexOf(' ', pos + maxLen);
+		}
+		if (splitAt <= pos) {
+			splitAt = pos + maxLen;
+		}
+		const auto chunk = text.mid(pos, splitAt - pos).trimmed();
+		if (!chunk.isEmpty()) {
+			chunks.push_back(chunk);
+		}
+		pos = splitAt;
+		while (pos < len && (text[pos] == '\n' || text[pos] == ' ')) {
+			++pos;
+		}
+	}
+	return chunks;
 }
 
 void SendGeminiTextReply(
@@ -1183,34 +1211,6 @@ void SendGeminiTextReply(
 			}
 		}
 	}, mediaBytes, mimeType);
-}
-
-std::vector<QString> SplitMessageChunks(const QString &text, int maxLen = 4000) {
-	std::vector<QString> chunks;
-	int pos = 0;
-	const int len = text.size();
-	while (pos < len) {
-		if (len - pos <= maxLen) {
-			chunks.push_back(text.mid(pos));
-			break;
-		}
-		int splitAt = text.lastIndexOf('\n', pos + maxLen);
-		if (splitAt <= pos + maxLen / 2) {
-			splitAt = text.lastIndexOf(' ', pos + maxLen);
-		}
-		if (splitAt <= pos) {
-			splitAt = pos + maxLen;
-		}
-		const auto chunk = text.mid(pos, splitAt - pos).trimmed();
-		if (!chunk.isEmpty()) {
-			chunks.push_back(chunk);
-		}
-		pos = splitAt;
-		while (pos < len && (text[pos] == '\n' || text[pos] == ' ')) {
-			++pos;
-		}
-	}
-	return chunks;
 }
 
 bool IsStandaloneHttpUrl(const QString &text) {
