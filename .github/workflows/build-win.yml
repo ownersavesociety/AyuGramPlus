@@ -119,8 +119,14 @@ jobs:
         shell: bash
         run: |
           set -e
-          df -h /c || true
-          rm -rf /c/Android /c/Strawberry /c/msys64 /c/SeleniumWebDrivers /c/hostedtoolcache/windows/CodeQL /c/hostedtoolcache/windows/go /c/hostedtoolcache/windows/Ruby /c/hostedtoolcache/windows/Java* /c/ProgramData/chocolatey || true
+          df -h || true
+          rm -rf /c/Android /c/Strawberry /c/msys64 /c/SeleniumWebDrivers \
+                 /c/hostedtoolcache/windows/CodeQL /c/hostedtoolcache/windows/go \
+                 /c/hostedtoolcache/windows/Ruby /c/hostedtoolcache/windows/Java* \
+                 /c/ProgramData/chocolatey /c/mingw64 /c/ghcup /c/cabal /c/ProgramData/Kind \
+                 "/c/Program Files/MongoDB" "/c/Program Files/MySQL" \
+                 "/c/Program Files/PostgreSQL" "/c/Program Files/R" \
+                 "/c/Program Files/Microsoft SQL Server" || true
           LIB_UNIX=$(cygpath -u "$LibrariesPath")
           if [ -d "$LIB_UNIX" ]; then
             find "$LIB_UNIX" -type f \( -name '*.obj' -o -name '*.pch' -o -name '*.idb' \) -delete || true
@@ -129,9 +135,11 @@ jobs:
             fi
           fi
           TBUILD_UNIX=$(cygpath -u "$TBUILD")
-          sed -i '/dump_syms/d' "$TBUILD_UNIX/$REPO_NAME/$PREPARE_PATH"
-          python3 -c 'import pathlib; p = pathlib.Path(r"'"$TBUILD/$REPO_NAME/$PREPARE_PATH"'"); t = p.read_text(); t = t.replace("    cmake --install . --config Debug\n    cmake --build .", "    cmake --install . --config Debug\n    del /s /q *.obj *.pch >nul 2>nul\n    cmake --build ."); p.write_text(t)' || true
-          df -h /c || true
+          PREP_UNIX="$TBUILD_UNIX/$REPO_NAME/$PREPARE_PATH"
+          sed -i '/dump_syms/d' "$PREP_UNIX"
+          python -c 'import pathlib; p = pathlib.Path(r"'"$TBUILD/$REPO_NAME/$PREPARE_PATH"'"); t = p.read_text(encoding="utf-8"); target = "    cmake --install . --config Debug\n    cmake --build .\n    cmake --install ."; repl = "    cmake --install . --config Debug\n    del /s /q *.obj *.pch >nul 2>nul\n    cmake --build .\n    cmake --install .\n    del /s /q *.obj *.pch >nul 2>nul"; assert target in t, "Qt6 block not found"; p.write_text(t.replace(target, repl, 1), encoding="utf-8")'
+          grep -n -C 2 "del /s /q" "$PREP_UNIX"
+          df -h || true
 
       - name: Build / Prepare Libraries
         run: |
