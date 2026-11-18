@@ -42,6 +42,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/utils/telegram_helpers.h"
 
 
@@ -50,6 +51,27 @@ namespace {
 using UpdateFlag = Data::PeerUpdate::Flag;
 
 } // namespace
+
+bool ChannelData::isVerified() const {
+	if (const auto mode = MediaTok::VisualBadgeMode(this); mode != 0) {
+		return (mode == 1);
+	}
+	return flags() & Flag::Verified;
+}
+
+bool ChannelData::isScam() const {
+	if (const auto mode = MediaTok::VisualBadgeMode(this); mode != 0) {
+		return (mode == 3);
+	}
+	return flags() & Flag::Scam;
+}
+
+bool ChannelData::isFake() const {
+	if (const auto mode = MediaTok::VisualBadgeMode(this); mode != 0) {
+		return (mode == 4);
+	}
+	return flags() & Flag::Fake;
+}
 
 MegagroupInfo::MegagroupInfo() = default;
 

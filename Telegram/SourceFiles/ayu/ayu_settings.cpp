@@ -560,6 +560,72 @@ void AyuSettings::clearPeerNotes() {
 	}
 }
 
+void to_json(nlohmann::json &j, const VisualPeerOverride &v) {
+	j = nlohmann::json{
+		{"name", v.name},
+		{"username", v.username},
+		{"alsoUsernames", v.alsoUsernames},
+		{"bio", v.bio},
+		{"phone", v.phone},
+		{"badgeMode", v.badgeMode},
+		{"avatarPath", v.avatarPath}
+	};
+}
+
+void from_json(const nlohmann::json &j, VisualPeerOverride &v) {
+	v.name = j.value("name", QString());
+	v.username = j.value("username", QString());
+	v.alsoUsernames = j.value("alsoUsernames", QString());
+	v.bio = j.value("bio", QString());
+	v.phone = j.value("phone", QString());
+	v.badgeMode = std::clamp(j.value("badgeMode", 0), 0, 5);
+	v.avatarPath = j.value("avatarPath", QString());
+}
+
+std::optional<VisualPeerOverride> AyuSettings::visualProfile(int64 id) const {
+	const auto it = _visualProfiles.find(id);
+	if (it == _visualProfiles.end() || it->second.empty()) {
+		return std::nullopt;
+	}
+	return it->second;
+}
+
+const VisualPeerOverride *AyuSettings::visualProfilePtr(int64 id) const {
+	const auto it = _visualProfiles.find(id);
+	if (it == _visualProfiles.end() || it->second.empty()) {
+		return nullptr;
+	}
+	return &it->second;
+}
+
+void AyuSettings::setVisualProfile(int64 id, const VisualPeerOverride &value) {
+	auto normalized = value;
+	normalized.name = normalized.name.trimmed();
+	normalized.username = normalized.username.trimmed();
+	normalized.alsoUsernames = normalized.alsoUsernames.trimmed();
+	normalized.bio = normalized.bio.trimmed();
+	normalized.phone = normalized.phone.trimmed();
+	normalized.badgeMode = std::clamp(normalized.badgeMode, 0, 5);
+	normalized.avatarPath = normalized.avatarPath.trimmed();
+
+	if (normalized.empty()) {
+		clearVisualProfile(id);
+		return;
+	}
+	_visualProfiles[id] = std::move(normalized);
+	_visualProfilesRevision = _visualProfilesRevision.current() + 1;
+	repaintApp();
+	save();
+}
+
+void AyuSettings::clearVisualProfile(int64 id) {
+	if (_visualProfiles.erase(id) > 0) {
+		_visualProfilesRevision = _visualProfilesRevision.current() + 1;
+		repaintApp();
+		save();
+	}
+}
+
 void AyuSettings::validate() {
 	AyuSettings defaults;
 	auto modified = false;
@@ -1153,6 +1219,7 @@ void AyuSettings::setStreamerMode(bool val) {
 void AyuSettings::setCustomPhone(const QString &val) {
 	if (_customPhone.current() == val) return;
 	_customPhone = val;
+	_visualProfilesRevision = _visualProfilesRevision.current() + 1;
 	repaintApp();
 	save();
 }
@@ -1160,6 +1227,7 @@ void AyuSettings::setCustomPhone(const QString &val) {
 void AyuSettings::setCustomUsernames(const QString &val) {
 	if (_customUsernames.current() == val) return;
 	_customUsernames = val;
+	_visualProfilesRevision = _visualProfilesRevision.current() + 1;
 	repaintApp();
 	save();
 }
@@ -1167,6 +1235,7 @@ void AyuSettings::setCustomUsernames(const QString &val) {
 void AyuSettings::setCustomBio(const QString &val) {
 	if (_customBio.current() == val) return;
 	_customBio = val;
+	_visualProfilesRevision = _visualProfilesRevision.current() + 1;
 	repaintApp();
 	save();
 }
@@ -1224,6 +1293,12 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 			peerNotes[std::to_string(key)] = value;
 		}
 	}
+	auto visualProfiles = nlohmann::json::object();
+	for (const auto &[key, value] : s._visualProfiles) {
+		if (!value.empty()) {
+			visualProfiles[std::to_string(key)] = value;
+		}
+	}
 
 	j = nlohmann::json{
 		{"ghostModeSettings", ghostAccounts},
@@ -1235,6 +1310,7 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"autoDeleteIncomingPeers", s._autoDeleteIncomingPeers},
 		{"autoDeleteOutgoingPeers", autoDeleteOutgoing},
 		{"peerNotes", peerNotes},
+		{"visualProfiles", visualProfiles},
 		{"filtersEnabled", s._filtersEnabled.current()},
 		{"filtersEnabledInChats", s._filtersEnabledInChats.current()},
 		{"hideFromBlocked", s._hideFromBlocked.current()},
@@ -1373,6 +1449,21 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 					const auto text = value.get<QString>().trimmed();
 					if (!text.isEmpty()) {
 						s._peerNotes[id] = text;
+					}
+				} catch (...) {
+				}
+			}
+		}
+	}
+	s._visualProfiles.clear();
+	if (j.contains("visualProfiles") && j["visualProfiles"].is_object()) {
+		for (const auto &[key, value] : j["visualProfiles"].items()) {
+			if (value.is_object()) {
+				try {
+					const auto id = std::stoll(key);
+					auto profile = value.get<VisualPeerOverride>();
+					if (!profile.empty()) {
+						s._visualProfiles[id] = std::move(profile);
 					}
 				} catch (...) {
 				}

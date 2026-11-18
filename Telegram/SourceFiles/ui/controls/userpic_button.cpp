@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "api/api_peer_photo.h"
+#include "ayu/ayu_settings.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ui/effects/upload_progress_overlay.h"
 #include "api/api_user_privacy.h"
 #include "base/call_delayed.h"
@@ -548,6 +550,11 @@ void UserpicButton::openPeerPhoto() {
 		return;
 	}
 
+	if (MediaTok::HasVisualAvatar(_peer) && _controller) {
+		MediaTok::OpenVisualAvatar4k(_controller, _peer);
+		return;
+	}
+
 	const auto id = _peer->userpicPhotoId();
 	if (!id) {
 		return;
@@ -595,10 +602,17 @@ void UserpicButton::setupPeerViewers() {
 		const auto loading = _showPeerUserpic
 			? Ui::PeerUserpicLoading(_userpicView)
 			: (_nonPersonalView && !_nonPersonalView->loaded());
-		if (!loading) {
+			if (!loading) {
 			_waiting = false;
 			startNewPhotoShowing();
 		}
+	}, _sourceLifetime);
+	AyuSettings::getInstance().visualProfilesRevisionValue(
+	) | rpl::skip(
+		1
+	) | rpl::on_next([=] {
+		processNewPeerPhoto();
+		update();
 	}, _sourceLifetime);
 }
 
@@ -814,11 +828,13 @@ QPoint UserpicButton::prepareRippleStartPosition() const {
 void UserpicButton::processPeerPhoto() {
 	Expects(_peer != nullptr);
 
+	const auto hasVisual4k = MediaTok::HasVisualAvatar(_peer);
 	const auto user = _peer->asUser();
-	const auto nonPersonal = (user && _source != Source::PeerPhoto)
+	const auto nonPersonal = (!hasVisual4k && user && _source != Source::PeerPhoto)
 		? _peer->session().api().peerPhoto().nonPersonalPhoto(user)
 		: nullptr;
-	_showPeerUserpic = (_source == Source::PeerPhoto)
+	_showPeerUserpic = hasVisual4k
+		|| (_source == Source::PeerPhoto)
 		|| (user
 			&& !user->hasPersonalPhoto()
 			&& (_source == Source::NonPersonalPhoto
@@ -848,7 +864,7 @@ void UserpicButton::processPeerPhoto() {
 		if (_peer->userpicPhotoUnknown()) {
 			_peer->updateFullForced();
 		}
-		_canOpenPhoto = (_peer->userpicPhotoId() != 0);
+		_canOpenPhoto = (_peer->userpicPhotoId() != 0) || hasVisual4k;
 		updateCursor();
 		updateVideo();
 	}
@@ -927,6 +943,10 @@ void UserpicButton::streamingReady(Media::Streaming::Information &&info) {
 void UserpicButton::updateVideo() {
 	Expects(_role == Role::OpenPhoto);
 
+	if (MediaTok::HasVisualAvatar(_peer)) {
+		clearStreaming();
+		return;
+	}
 	const auto id = _peer->userpicPhotoId();
 	if (!id) {
 		clearStreaming();

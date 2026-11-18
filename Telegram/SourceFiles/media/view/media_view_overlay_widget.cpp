@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/view/media_view_overlay_widget.h"
 
 #include "apiwrap.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "api/api_attached_stickers.h"
 #include "api/api_peer_photo.h"
 #include "api/api_polls.h"
@@ -3977,6 +3978,9 @@ void OverlayWidget::handleSharedMediaUpdate(SharedMediaWithLastSlice &&update) {
 }
 
 std::optional<OverlayWidget::UserPhotosKey> OverlayWidget::userPhotosKey() const {
+	if (_photo && MediaTok::IsVisualAvatarPhotoId(_photo->id)) {
+		return std::nullopt;
+	}
 	if (!_message && _user && _photo) {
 		return UserPhotosKey{ peerToUser(_user->id), _photo->id };
 	}

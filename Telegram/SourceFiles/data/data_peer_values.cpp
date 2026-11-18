@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 
 
 namespace Data {
@@ -423,12 +424,18 @@ rpl::producer<bool> CanManageGroupCallValue(not_null<PeerData*> peer) {
 rpl::producer<bool> PeerPremiumValue(not_null<PeerData*> peer) {
 	const auto user = peer->asUser();
 	if (!user) {
-		return rpl::single(false);
+		return AyuSettings::getInstance().visualProfilesRevisionValue(
+		) | rpl::map([=] {
+			return MediaTok::VisualBadgeMode(peer) == 2;
+		});
 	}
-	return user->flagsValue(
-	) | rpl::filter([=](UserData::Flags::Change change) {
-		return (change.diff & UserDataFlag::Premium);
-	}) | rpl::map([=] {
+	return rpl::combine(
+		user->flagsValue(
+		) | rpl::filter([=](UserData::Flags::Change change) {
+			return (change.diff & UserDataFlag::Premium);
+		}),
+		AyuSettings::getInstance().visualProfilesRevisionValue()
+	) | rpl::map([=](auto, auto) {
 		return user->isPremium();
 	});
 }

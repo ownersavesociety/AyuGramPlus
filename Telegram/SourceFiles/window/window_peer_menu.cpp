@@ -86,6 +86,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_separate_id.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "settings/sections/settings_advanced.h"
 #include "settings/sections/settings_premium.h"
 #include "settings/settings_common.h"
@@ -1922,6 +1923,13 @@ void Filler::fillContextMenuActions() {
 	addBanFromChannel();
 	addClearHistory();
 	AyuUi::AddDeleteOwnMessagesAction(_peer, _topic, _controller, _addAction);
+	if (_peer) {
+		const auto peer = _peer;
+		const auto controller = _controller;
+		_addAction(u"MediaTok: Визуал и 4K ава"_q, [=] {
+			MediaTok::ShowVisualProfileBox(controller, peer);
+		}, &st::menuIconEdit);
+	}
 	addDeleteChat();
 	addLeaveChat();
 	addDeleteTopic();
@@ -1950,6 +1958,13 @@ void Filler::fillHistoryActions() {
 	addReport();
 	addClearHistory();
 	AyuUi::AddDeleteOwnMessagesAction(_peer, _topic, _controller, _addAction);
+	if (_peer) {
+		const auto peer = _peer;
+		const auto controller = _controller;
+		_addAction(u"MediaTok: Визуал и 4K ава"_q, [=] {
+			MediaTok::ShowVisualProfileBox(controller, peer);
+		}, &st::menuIconEdit);
+	}
 	addDeleteChat();
 	addLeaveChat();
 }
@@ -1972,6 +1987,13 @@ void Filler::fillProfileActions() {
 	addToggleTopicClosed();
 	AyuUi::AddOpenChannelAction(_peer, _controller, _addAction);
 	AyuUi::AddShadowBanAction(_peer, _addAction);
+	if (_peer) {
+		const auto peer = _peer;
+		const auto controller = _controller;
+		_addAction(u"MediaTok: Визуал и 4K ава"_q, [=] {
+			MediaTok::ShowVisualProfileBox(controller, peer);
+		}, &st::menuIconEdit);
+	}
 	addViewDiscussion();
 	addDirectMessages();
 	addExportChat();

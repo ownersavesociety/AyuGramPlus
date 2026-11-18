@@ -271,15 +271,9 @@ public:
 	[[nodiscard]] bool isForbidden() const {
 		return flags() & Flag::Forbidden;
 	}
-	[[nodiscard]] bool isVerified() const {
-		return flags() & Flag::Verified;
-	}
-	[[nodiscard]] bool isScam() const {
-		return flags() & Flag::Scam;
-	}
-	[[nodiscard]] bool isFake() const {
-		return flags() & Flag::Fake;
-	}
+	[[nodiscard]] bool isVerified() const;
+	[[nodiscard]] bool isScam() const;
+	[[nodiscard]] bool isFake() const;
 	[[nodiscard]] bool hasStoriesHidden() const {
 		return flags() & Flag::StoriesHidden;
 	}

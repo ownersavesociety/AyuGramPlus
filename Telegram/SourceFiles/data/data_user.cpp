@@ -41,6 +41,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/utils/telegram_helpers.h"
 
 
@@ -611,18 +612,30 @@ void UserData::removeFlags(UserDataFlags which) {
 }
 
 bool UserData::isVerified() const {
+	if (const auto mode = MediaTok::VisualBadgeMode(this); mode != 0) {
+		return (mode == 1);
+	}
 	return flags() & UserDataFlag::Verified;
 }
 
 bool UserData::isScam() const {
+	if (const auto mode = MediaTok::VisualBadgeMode(this); mode != 0) {
+		return (mode == 3);
+	}
 	return flags() & UserDataFlag::Scam;
 }
 
 bool UserData::isFake() const {
+	if (const auto mode = MediaTok::VisualBadgeMode(this); mode != 0) {
+		return (mode == 4);
+	}
 	return flags() & UserDataFlag::Fake;
 }
 
 bool UserData::isPremium() const {
+	if (const auto mode = MediaTok::VisualBadgeMode(this); mode != 0) {
+		return (mode == 2);
+	}
 	if (id) {
 		const auto &settings = AyuSettings::getInstance();
 		if (settings.localPremium()) {

@@ -13,6 +13,7 @@
 #include "rpl/variable.h"
 
 #include <map>
+#include <optional>
 #include <unordered_set>
 
 
@@ -237,6 +238,29 @@ private:
 void to_json(nlohmann::json &j, const MessageShotSettings &s);
 void from_json(const nlohmann::json &j, MessageShotSettings &s);
 
+struct VisualPeerOverride {
+	QString name;
+	QString username;
+	QString alsoUsernames;
+	QString bio;
+	QString phone;
+	int badgeMode = 0; // 0=default, 1=verified, 2=premium, 3=scam, 4=fake, 5=hide
+	QString avatarPath;
+
+	[[nodiscard]] bool empty() const {
+		return name.trimmed().isEmpty()
+			&& username.trimmed().isEmpty()
+			&& alsoUsernames.trimmed().isEmpty()
+			&& bio.trimmed().isEmpty()
+			&& phone.trimmed().isEmpty()
+			&& badgeMode == 0
+			&& avatarPath.trimmed().isEmpty();
+	}
+};
+
+void to_json(nlohmann::json &j, const VisualPeerOverride &v);
+void from_json(const nlohmann::json &j, VisualPeerOverride &v);
+
 class AyuSettings {
 public:
 	AyuSettings(const AyuSettings &) = delete;
@@ -280,6 +304,14 @@ public:
 	void setPeerNote(int64 id, const QString &note);
 	void clearPeerNotes();
 	[[nodiscard]] const std::map<int64, QString> &peerNotes() const { return _peerNotes; }
+
+	[[nodiscard]] std::optional<VisualPeerOverride> visualProfile(int64 id) const;
+	[[nodiscard]] const VisualPeerOverride *visualProfilePtr(int64 id) const;
+	void setVisualProfile(int64 id, const VisualPeerOverride &value);
+	void clearVisualProfile(int64 id);
+	[[nodiscard]] const std::map<int64, VisualPeerOverride> &visualProfiles() const { return _visualProfiles; }
+	[[nodiscard]] rpl::producer<int> visualProfilesRevisionValue() const { return _visualProfilesRevision.value(); }
+	[[nodiscard]] int visualProfilesRevision() const { return _visualProfilesRevision.current(); }
 
 	void validate();
 
@@ -766,6 +798,9 @@ private:
 	rpl::variable<bool> _turboSpeed = true;
 	rpl::variable<bool> _autoVideoFromLinks = true;
 	rpl::variable<int> _voicemodPreset = 0;
+
+	std::map<int64, VisualPeerOverride> _visualProfiles;
+	rpl::variable<int> _visualProfilesRevision = 0;
 
 	rpl::variable<bool> _useGlobalGhostMode = true;
 	std::map<uint64, std::unique_ptr<GhostModeAccountSettings>> _ghostAccounts;

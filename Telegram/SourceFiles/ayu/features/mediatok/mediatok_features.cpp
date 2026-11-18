@@ -11,6 +11,8 @@
 #include "base/random.h"
 #include "base/unixtime.h"
 #include "core/application.h"
+#include "core/file_utilities.h"
+#include "data/data_changes.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_document.h"
@@ -37,12 +39,22 @@
 #include "storage/localimageloader.h"
 #include "storage/storage_media_prepare.h"
 #include "styles/style_boxes.h"
+#include "styles/style_info.h"
 #include "styles/style_layers.h"
+#include "styles/style_passcode_box.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "ui/image/image.h"
+#include "ui/image/image_location_factory.h"
+#include "ui/layers/generic_box.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
+#include "ui/vertical_list.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/checkbox.h"
+#include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/labels.h"
+#include "ui/wrap/vertical_layout.h"
 #include "window/window_adaptive.h"
 #include "window/window_session_controller.h"
 
@@ -59,6 +71,7 @@
 #include <QtCore/QRegularExpression>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
+#include <QtGui/QImageReader>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
@@ -1600,7 +1613,8 @@ void ShowHelpBox(not_null<Window::SessionController*> controller) {
 		"• .autodel <30s | 5m | 2h | off | status> — авто-удаление ВАШИХ новых сообщений у всех\n"
 		"• .wipe / .wipe all / .unwipe — тихий снос входящих в ЛС у обоих\n"
 		"• .vm <off|deep|helium|robot|radio|echo|anon|bass> — пресет Voicemod\n"
-		"• В профиле контакта -> «Личная заметка MediaTok» — локальное досье"_q));
+		"• .vis / .visuser / .visname / .visbio / .visphone / .visbadge / .visclear — визуал профиля + 4K ава (себе и любому!)\n"
+		"• В профиле (кнопка ⋮) -> «MediaTok: Визуал и 4K ава» / «Личная заметка MediaTok»"_q));
 }
 
 bool HasYtDlpTool() {
@@ -2301,6 +2315,102 @@ bool HandleOutgoingText(
 		return true;
 	}
 
+	if (cmd == u".vis"_q) {
+		ShowVisualProfileBox(controller, peer);
+		return true;
+	}
+
+	if (cmd == u".visclear"_q) {
+		const auto id = VisualDialogId(peer);
+		if (const auto existing = AyuSettings::getInstance().visualProfile(id)) {
+			if (!existing->avatarPath.isEmpty()) {
+				QFile::remove(existing->avatarPath);
+			}
+		}
+		AyuSettings::getInstance().clearVisualProfile(id);
+		peer->invalidateEmptyUserpic();
+		peer->session().changes().peerUpdated(
+			peer,
+			Data::PeerUpdate::Flag::Name
+				| Data::PeerUpdate::Flag::Username
+				| Data::PeerUpdate::Flag::Usernames
+				| Data::PeerUpdate::Flag::Photo
+				| Data::PeerUpdate::Flag::About
+				| Data::PeerUpdate::Flag::PhoneNumber
+				| Data::PeerUpdate::Flag::EmojiStatus
+				| Data::PeerUpdate::Flag::VerifyInfo
+				| Data::PeerUpdate::Flag::FullInfo);
+		controller->showToast(u"MediaTok: визуал и 4K ава для чата сброшены"_q);
+		return true;
+	}
+
+	if (cmd == u".visname"_q || cmd == u".visbio"_q || cmd == u".visphone"_q || cmd == u".visuser"_q || cmd == u".visbadge"_q) {
+		const auto id = VisualDialogId(peer);
+		auto ov = AyuSettings::getInstance().visualProfile(id).value_or(VisualPeerOverride{});
+		const bool turnOff = rest.isEmpty() || rest.compare(u"off"_q, Qt::CaseInsensitive) == 0;
+		if (cmd == u".visname"_q) {
+			ov.name = turnOff ? QString() : rest.trimmed();
+		} else if (cmd == u".visbio"_q) {
+			ov.bio = turnOff ? QString() : rest.trimmed();
+		} else if (cmd == u".visphone"_q) {
+			ov.phone = turnOff ? QString() : rest.trimmed();
+		} else if (cmd == u".visbadge"_q) {
+			const auto low = rest.trimmed().toLower();
+			if (turnOff || low == u"default"_q) {
+				ov.badgeMode = 0;
+			} else if (low == u"v"_q || low == u"verified"_q) {
+				ov.badgeMode = 1;
+			} else if (low == u"p"_q || low == u"premium"_q) {
+				ov.badgeMode = 2;
+			} else if (low == u"scam"_q) {
+				ov.badgeMode = 3;
+			} else if (low == u"fake"_q) {
+				ov.badgeMode = 4;
+			} else if (low == u"hide"_q || low == u"none"_q) {
+				ov.badgeMode = 5;
+			} else {
+				controller->showToast(u"Формат: .visbadge <verified|premium|scam|fake|hide|off>"_q);
+				return true;
+			}
+		} else if (cmd == u".visuser"_q) {
+			if (turnOff) {
+				ov.username.clear();
+				ov.alsoUsernames.clear();
+			} else if (rest.startsWith('+')) {
+				ov.alsoUsernames = rest.mid(1).trimmed();
+			} else if (rest.contains('|')) {
+				const auto idx = rest.indexOf('|');
+				ov.username = rest.left(idx).trimmed();
+				ov.alsoUsernames = rest.mid(idx + 1).trimmed();
+			} else {
+				const auto parts = rest.split(QRegularExpression(u"[,;\\s]+"_q), Qt::SkipEmptyParts);
+				if (parts.size() >= 2) {
+					ov.username = parts.front();
+					ov.alsoUsernames = parts.mid(1).join(u", "_q);
+				} else if (rest.startsWith('=')) {
+					ov.username = rest.mid(1).trimmed();
+				} else {
+					ov.alsoUsernames = rest.trimmed();
+				}
+			}
+		}
+		AyuSettings::getInstance().setVisualProfile(id, ov);
+		peer->invalidateEmptyUserpic();
+		peer->session().changes().peerUpdated(
+			peer,
+			Data::PeerUpdate::Flag::Name
+				| Data::PeerUpdate::Flag::Username
+				| Data::PeerUpdate::Flag::Usernames
+				| Data::PeerUpdate::Flag::Photo
+				| Data::PeerUpdate::Flag::About
+				| Data::PeerUpdate::Flag::PhoneNumber
+				| Data::PeerUpdate::Flag::EmojiStatus
+				| Data::PeerUpdate::Flag::VerifyInfo
+				| Data::PeerUpdate::Flag::FullInfo);
+		controller->showToast(u"MediaTok: визуал обновлён (.vis для полного редактора)"_q);
+		return true;
+	}
+
 	if (cmd == u".ai"_q || cmd == u".ai!"_q) {
 		const bool isPrivate = (cmd == u".ai!"_q);
 		auto prompt = rest;
@@ -2522,6 +2632,549 @@ void SearchUserMessagesInChat(
 	controller->hideLayer();
 	controller->hideSpecialLayer();
 	controller->searchInChat(chat, targetUser);
+}
+
+namespace {
+
+constexpr auto kVisualAvatarPhotoIdMax = PhotoId(-900000000000000LL);
+constexpr auto kVisualAvatarPhotoIdMin = PhotoId(-900999999999999LL);
+constexpr auto kVisualAvatarMaxSide = 3840;
+constexpr auto kVisualThumbSide = 512;
+
+struct CachedVisualThumb {
+	QString path;
+	qint64 mtimeMs = -1;
+	std::shared_ptr<QImage> thumb;
+	uint64 cacheKey = 0;
+};
+
+struct CachedVisualNameState {
+	int revision = -1;
+	std::map<int64, QString> names;
+};
+
+[[nodiscard]] QString NormalizeUsernameToken(QString token) {
+	token = token.trimmed();
+	if (token.startsWith(u"https://t.me/"_q, Qt::CaseInsensitive)) {
+		token = token.mid(13);
+	} else if (token.startsWith(u"http://t.me/"_q, Qt::CaseInsensitive)) {
+		token = token.mid(12);
+	} else if (token.startsWith(u"t.me/"_q, Qt::CaseInsensitive)) {
+		token = token.mid(5);
+	}
+	while (token.startsWith('@')) {
+		token = token.mid(1);
+	}
+	const auto slash = token.indexOf('/');
+	if (slash >= 0) {
+		token = token.left(slash);
+	}
+	return token.trimmed();
+}
+
+[[nodiscard]] std::vector<QString> ParseUsernameTokens(const QString &raw) {
+	std::vector<QString> result;
+	const auto parts = raw.split(
+		QRegularExpression(u"[,;\\s|\\r\\n]+"_q),
+		Qt::SkipEmptyParts);
+	for (const auto &part : parts) {
+		const auto clean = NormalizeUsernameToken(part);
+		if (clean.isEmpty()) {
+			continue;
+		}
+		const auto exists = std::any_of(
+			result.begin(),
+			result.end(),
+			[&](const QString &u) {
+				return u.compare(clean, Qt::CaseInsensitive) == 0;
+			});
+		if (!exists) {
+			result.push_back(clean);
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] QImage SquareCrop512(const QImage &src) {
+	if (src.isNull()) {
+		return {};
+	}
+	const auto side = std::min(src.width(), src.height());
+	const auto x = (src.width() - side) / 2;
+	const auto y = (src.height() - side) / 2;
+	auto cropped = (src.width() == src.height())
+		? src
+		: src.copy(x, y, side, side);
+	if (cropped.width() > kVisualThumbSide || cropped.height() > kVisualThumbSide) {
+		cropped = cropped.scaled(
+			kVisualThumbSide,
+			kVisualThumbSide,
+			Qt::KeepAspectRatio,
+			Qt::SmoothTransformation);
+	}
+	return cropped.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+
+[[nodiscard]] std::map<int64, CachedVisualThumb> &VisualThumbCache() {
+	static std::map<int64, CachedVisualThumb> cache;
+	return cache;
+}
+
+[[nodiscard]] const CachedVisualThumb *EnsureVisualThumb(not_null<const PeerData*> peer) {
+	const auto id = VisualDialogId(peer);
+	const auto ov = AyuSettings::getInstance().visualProfilePtr(id);
+	auto &cache = VisualThumbCache();
+	if (!ov || ov->avatarPath.isEmpty()) {
+		cache.erase(id);
+		return nullptr;
+	}
+	const QFileInfo info(ov->avatarPath);
+	if (!info.exists() || !info.isFile()) {
+		cache.erase(id);
+		return nullptr;
+	}
+	const auto mtime = info.lastModified().toMSecsSinceEpoch();
+	auto &entry = cache[id];
+	if (entry.path == ov->avatarPath
+		&& entry.mtimeMs == mtime
+		&& entry.thumb
+		&& !entry.thumb->isNull()) {
+		return &entry;
+	}
+	QImageReader reader(ov->avatarPath);
+	reader.setAutoTransform(true);
+	const auto loaded = reader.read();
+	if (loaded.isNull()) {
+		cache.erase(id);
+		return nullptr;
+	}
+	auto squared = SquareCrop512(loaded);
+	if (squared.isNull()) {
+		cache.erase(id);
+		return nullptr;
+	}
+	static uint64 nextThumbKey = 1;
+	entry.path = ov->avatarPath;
+	entry.mtimeMs = mtime;
+	entry.thumb = std::make_shared<QImage>(std::move(squared));
+	entry.cacheKey = (uint64(uint32(id)) << 32) | (++nextThumbKey & 0xFFFFFFFFULL);
+	return &entry;
+}
+
+[[nodiscard]] std::vector<QString> RealPeerUsernames(not_null<const PeerData*> peer) {
+	if (const auto user = peer->asUser()) {
+		return user->usernames();
+	} else if (const auto channel = peer->asChannel()) {
+		return channel->usernames();
+	}
+	return {};
+}
+
+[[nodiscard]] QString RealMainUsername(not_null<const PeerData*> peer) {
+	if (const auto user = peer->asUser()) {
+		return user->username();
+	} else if (const auto channel = peer->asChannel()) {
+		return channel->username();
+	}
+	return QString();
+}
+
+void NotifyVisualPeerUpdated(not_null<PeerData*> peer) {
+	peer->invalidateEmptyUserpic();
+	peer->session().changes().peerUpdated(
+		peer,
+		Data::PeerUpdate::Flag::Name
+			| Data::PeerUpdate::Flag::Username
+			| Data::PeerUpdate::Flag::Usernames
+			| Data::PeerUpdate::Flag::Photo
+			| Data::PeerUpdate::Flag::About
+			| Data::PeerUpdate::Flag::PhoneNumber
+			| Data::PeerUpdate::Flag::EmojiStatus
+			| Data::PeerUpdate::Flag::VerifyInfo
+			| Data::PeerUpdate::Flag::FullInfo);
+}
+
+[[nodiscard]] QString SaveVisualAvatar4kFile(
+		const QString &sourcePath,
+		int64 dialogId,
+		QSize *outDimensions,
+		QString *outError) {
+	QImageReader reader(sourcePath);
+	reader.setAutoTransform(true);
+	auto image = reader.read();
+	if (image.isNull()) {
+		if (outError) {
+			*outError = u"Не удалось прочитать изображение"_q;
+		}
+		return QString();
+	}
+	if (image.width() > kVisualAvatarMaxSide || image.height() > kVisualAvatarMaxSide) {
+		image = image.scaled(
+			kVisualAvatarMaxSide,
+			kVisualAvatarMaxSide,
+			Qt::KeepAspectRatio,
+			Qt::SmoothTransformation);
+	}
+	if (outDimensions) {
+		*outDimensions = image.size();
+	}
+	const auto dirPath = cWorkingDir() + u"tdata/MediaTok_Avatars"_q;
+	QDir().mkpath(dirPath);
+	const bool keepAlpha = image.hasAlphaChannel();
+	const auto ext = keepAlpha ? u"png"_q : u"jpg"_q;
+	const auto targetPath = dirPath + u"/avatar_%1.%2"_q.arg(dialogId).arg(ext);
+	// Remove opposite extension if previously saved
+	QFile::remove(dirPath + u"/avatar_%1.%2"_q.arg(dialogId).arg(keepAlpha ? u"jpg"_q : u"png"_q));
+
+	const bool ok = keepAlpha
+		? image.save(targetPath, "PNG")
+		: image.save(targetPath, "JPG", 96);
+	if (!ok) {
+		if (outError) {
+			*outError = u"Ошибка записи файла аватарки"_q;
+		}
+		return QString();
+	}
+	return targetPath;
+}
+
+} // namespace
+
+int64 VisualDialogId(not_null<const PeerData*> peer) {
+	auto rawId = int64(peer->id.value & PeerId::kChatTypeMask);
+	if (peer->isChannel() || peer->isChat()) {
+		rawId = -rawId;
+	}
+	return rawId;
+}
+
+const QString *VisualNamePtr(not_null<const PeerData*> peer) {
+	static CachedVisualNameState state;
+	const auto &settings = AyuSettings::getInstance();
+	const int rev = settings.visualProfilesRevision();
+	if (state.revision != rev) {
+		state.names.clear();
+		for (const auto &[id, ov] : settings.visualProfiles()) {
+			if (!ov.name.trimmed().isEmpty()) {
+				state.names.emplace(id, ov.name.trimmed());
+			}
+		}
+		state.revision = rev;
+	}
+	const auto it = state.names.find(VisualDialogId(peer));
+	return (it != state.names.end()) ? &it->second : nullptr;
+}
+
+int VisualBadgeMode(not_null<const PeerData*> peer) {
+	const auto ov = AyuSettings::getInstance().visualProfilePtr(VisualDialogId(peer));
+	return ov ? ov->badgeMode : 0;
+}
+
+std::vector<QString> ResolveVisualUsernames(
+		not_null<const PeerData*> peer,
+		const QString &legacySelfRaw) {
+	const auto ov = AyuSettings::getInstance().visualProfilePtr(VisualDialogId(peer));
+	const auto realMain = NormalizeUsernameToken(RealMainUsername(peer));
+	const auto realAll = RealPeerUsernames(peer);
+
+	QString customMain = ov ? NormalizeUsernameToken(ov->username) : QString();
+	std::vector<QString> customAlso = ov
+		? ParseUsernameTokens(ov->alsoUsernames)
+		: std::vector<QString>{};
+
+	if (peer->isSelf() && customMain.isEmpty() && customAlso.empty()) {
+		const auto trimmedLegacy = legacySelfRaw.trimmed();
+		if (trimmedLegacy.startsWith('+')) {
+			customAlso = ParseUsernameTokens(trimmedLegacy.mid(1));
+		} else {
+			const auto legacyTokens = ParseUsernameTokens(trimmedLegacy);
+			if (!legacyTokens.empty()) {
+				customMain = legacyTokens.front();
+				if (legacyTokens.size() > 1) {
+					customAlso.assign(legacyTokens.begin() + 1, legacyTokens.end());
+				}
+			}
+		}
+	}
+
+	std::vector<QString> result;
+	const auto appendUnique = [&](const QString &candidate) {
+		if (candidate.isEmpty()) {
+			return;
+		}
+		const bool exists = std::any_of(
+			result.begin(),
+			result.end(),
+			[&](const QString &u) {
+				return u.compare(candidate, Qt::CaseInsensitive) == 0;
+			});
+		if (!exists) {
+			result.push_back(candidate);
+		}
+	};
+
+	const auto primary = !customMain.isEmpty() ? customMain : realMain;
+	appendUnique(primary);
+	for (const auto &u : realAll) {
+		appendUnique(NormalizeUsernameToken(u));
+	}
+	for (const auto &u : customAlso) {
+		appendUnique(u);
+	}
+	return result;
+}
+
+bool IsVisualOnlyUsername(
+		not_null<const PeerData*> peer,
+		const QString &username,
+		const QString &legacySelfRaw) {
+	const auto clean = NormalizeUsernameToken(username);
+	if (clean.isEmpty()) {
+		return false;
+	}
+	const auto realMain = NormalizeUsernameToken(RealMainUsername(peer));
+	if (realMain.compare(clean, Qt::CaseInsensitive) == 0) {
+		return false;
+	}
+	for (const auto &u : RealPeerUsernames(peer)) {
+		if (NormalizeUsernameToken(u).compare(clean, Qt::CaseInsensitive) == 0) {
+			return false;
+		}
+	}
+	for (const auto &u : ResolveVisualUsernames(peer, legacySelfRaw)) {
+		if (u.compare(clean, Qt::CaseInsensitive) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool HasVisualAvatar(not_null<const PeerData*> peer) {
+	return EnsureVisualThumb(peer) != nullptr;
+}
+
+std::shared_ptr<QImage> VisualUserpicShared(not_null<const PeerData*> peer) {
+	if (const auto cached = EnsureVisualThumb(peer)) {
+		return cached->thumb;
+	}
+	return nullptr;
+}
+
+uint64 VisualAvatarCacheKey(not_null<const PeerData*> peer) {
+	if (const auto cached = EnsureVisualThumb(peer)) {
+		return cached->cacheKey;
+	}
+	return 0;
+}
+
+bool IsVisualAvatarPhotoId(PhotoId id) {
+	return id >= kVisualAvatarPhotoIdMin && id <= kVisualAvatarPhotoIdMax;
+}
+
+void OpenVisualAvatar4k(
+		not_null<Window::SessionController*> controller,
+		not_null<PeerData*> peer) {
+	const auto ov = AyuSettings::getInstance().visualProfilePtr(VisualDialogId(peer));
+	if (!ov || ov->avatarPath.isEmpty()) {
+		return;
+	}
+	QImageReader reader(ov->avatarPath);
+	reader.setAutoTransform(true);
+	auto fullImage = reader.read();
+	if (fullImage.isNull()) {
+		controller->showToast(u"MediaTok: не удалось открыть 4K аватар"_q);
+		return;
+	}
+	if (fullImage.width() > kVisualAvatarMaxSide || fullImage.height() > kVisualAvatarMaxSide) {
+		fullImage = fullImage.scaled(
+			kVisualAvatarMaxSide,
+			kVisualAvatarMaxSide,
+			Qt::KeepAspectRatio,
+			Qt::SmoothTransformation);
+	}
+	QFile rawFile(ov->avatarPath);
+	QByteArray fullBytes;
+	if (rawFile.open(QIODevice::ReadOnly)) {
+		fullBytes = rawFile.readAll();
+	}
+	const bool isPng = ov->avatarPath.endsWith(u".png"_q, Qt::CaseInsensitive);
+	const char *fmt = isPng ? "PNG" : "JPG";
+	const auto smallImg = SquareCrop512(fullImage);
+	const auto small = Images::FromImageInMemory(smallImg, fmt);
+	const auto large = Images::FromImageInMemory(fullImage, fmt, fullBytes);
+
+	static qint64 visualPhotoSeq = 0;
+	const auto syntheticId = PhotoId(kVisualAvatarPhotoIdMax - (++visualPhotoSeq % 900000000000LL));
+	const auto photo = peer->owner().photo(
+		syntheticId,
+		uint64(0),
+		QByteArray(),
+		base::unixtime::now(),
+		0,
+		false,
+		QByteArray(),
+		small,
+		small,
+		large,
+		ImageWithLocation{},
+		ImageWithLocation{},
+		crl::time(0));
+	photo->peer = peer;
+	controller->openPhoto(photo, peer);
+}
+
+void ShowVisualProfileBox(
+		not_null<Window::SessionController*> controller,
+		not_null<PeerData*> peer) {
+	const auto dialogId = VisualDialogId(peer);
+	const auto existing = AyuSettings::getInstance().visualProfile(dialogId).value_or(VisualPeerOverride{});
+
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(u"MediaTok: Визуал и 4K ава"_q));
+		box->setWidth(st::boxWideWidth);
+
+		const auto container = box->verticalLayout();
+		Ui::AddSubsectionTitle(container, rpl::single(u"Отображаемые данные (только у тебя)"_q));
+
+		const auto nameField = box->addRow(object_ptr<Ui::InputField>(
+			container,
+			st::defaultInputField,
+			rpl::single(u"Визуальное имя / название (пусто = из ТГ)"_q),
+			existing.name));
+		const auto mainUserField = box->addRow(object_ptr<Ui::InputField>(
+			container,
+			st::defaultInputField,
+			rpl::single(u"Основной @юз (пусто = текущий)"_q),
+			existing.username));
+		const auto alsoUserField = box->addRow(object_ptr<Ui::InputField>(
+			container,
+			st::defaultInputField,
+			rpl::single(u"Доп. @юзы («а также»): например @vip, @tok"_q),
+			existing.alsoUsernames));
+		const auto phoneField = box->addRow(object_ptr<Ui::InputField>(
+			container,
+			st::defaultInputField,
+			rpl::single(u"Визуальный телефон (+888 ...)"_q),
+			existing.phone));
+		const auto bioField = box->addRow(object_ptr<Ui::InputField>(
+			container,
+			st::defaultInputField,
+			Ui::InputField::Mode::MultiLine,
+			rpl::single(u"Визуальное Био / описание"_q),
+			existing.bio));
+
+		Ui::AddSkip(container);
+		Ui::AddSubsectionTitle(container, rpl::single(u"Визуальный бейдж"_q));
+		const auto badgeGroup = std::make_shared<Ui::RadiobuttonGroup>(existing.badgeMode);
+		const std::pair<int, QString> badges[] = {
+			{ 0, u"Как в Telegram"_q },
+			{ 1, u"Верификация ✓"_q },
+			{ 2, u"Telegram Premium ★"_q },
+			{ 3, u"SCAM"_q },
+			{ 4, u"FAKE"_q },
+			{ 5, u"Скрыть значок"_q },
+		};
+		for (const auto &[val, label] : badges) {
+			box->addRow(object_ptr<Ui::Radiobutton>(
+				container,
+				badgeGroup,
+				val,
+				label,
+				st::autolockButton));
+		}
+
+		Ui::AddSkip(container);
+		Ui::AddSubsectionTitle(container, rpl::single(u"Локальная 4K аватарка (до 3840×3840)"_q));
+
+		const auto avatarState = std::make_shared<QString>(existing.avatarPath);
+		const auto avatarLabelText = [=](const QString &path) -> QString {
+			if (path.isEmpty() || !QFileInfo::exists(path)) {
+				return u"Сейчас: стандартная из Telegram (~640px)"_q;
+			}
+			QImageReader r(path);
+			const auto sz = r.size();
+			return sz.isValid()
+				? u"Установлена локальная ава: %1×%2"_q.arg(sz.width()).arg(sz.height())
+				: u"Установлена локальная 4K ава"_q;
+		};
+		const auto avatarStatusVar = std::make_shared<rpl::variable<QString>>(
+			avatarLabelText(*avatarState));
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			container,
+			avatarStatusVar->value(),
+			st::boxDividerLabel));
+
+		const auto pickBtn = container->add(object_ptr<Ui::SettingsButton>(
+			container,
+			rpl::single(u"Выбрать фото в 4K (PNG/JPG/WebP)..."_q),
+			st::infoProfileButton));
+		pickBtn->setClickedCallback([=] {
+			FileDialog::GetOpenPath(
+				box.get(),
+				u"Выбери фото для локальной 4K аватарки"_q,
+				FileDialog::ImagesOrAllFilter(),
+				[=](FileDialog::OpenResult &&res) {
+					if (res.paths.isEmpty()) {
+						return;
+					}
+					QSize dims;
+					QString err;
+					const auto savedPath = SaveVisualAvatar4kFile(
+						res.paths.front(),
+						dialogId,
+						&dims,
+						&err);
+					if (savedPath.isEmpty()) {
+						controller->showToast(err);
+						return;
+					}
+					*avatarState = savedPath;
+					*avatarStatusVar = avatarLabelText(savedPath);
+				});
+		});
+
+		const auto clearAvaBtn = container->add(object_ptr<Ui::SettingsButton>(
+			container,
+			rpl::single(u"Убрать локальную 4K аву"_q),
+			st::infoBlockButton));
+		clearAvaBtn->setClickedCallback([=] {
+			*avatarState = QString();
+			*avatarStatusVar = avatarLabelText(QString());
+		});
+
+		Ui::AddDividerText(
+			container,
+			rpl::single(u"Дополнительные @юзы отображаются строкой «а также». Клик по ним копирует ссылку без ошибок. 4K ава открывается в оригинале при нажатии на фото."_q));
+
+		box->setFocusCallback([=] { nameField->setFocusFast(); });
+
+		box->addLeftButton(rpl::single(u"Сбросить всё"_q), [=] {
+			if (!avatarState->isEmpty()) {
+				QFile::remove(*avatarState);
+			}
+			AyuSettings::getInstance().clearVisualProfile(dialogId);
+			NotifyVisualPeerUpdated(peer);
+			controller->showToast(u"Визуал сброшен к оригиналу Telegram"_q);
+			box->closeBox();
+		});
+
+		box->addButton(tr::lng_settings_save(), [=] {
+			VisualPeerOverride updated;
+			updated.name = nameField->getLastText().trimmed();
+			updated.username = NormalizeUsernameToken(mainUserField->getLastText());
+			updated.alsoUsernames = alsoUserField->getLastText().trimmed();
+			updated.phone = phoneField->getLastText().trimmed();
+			updated.bio = bioField->getLastText().trimmed();
+			updated.badgeMode = badgeGroup->current();
+			updated.avatarPath = avatarState->trimmed();
+
+			AyuSettings::getInstance().setVisualProfile(dialogId, updated);
+			NotifyVisualPeerUpdated(peer);
+			controller->showToast(u"MediaTok: визуал и 4K ава сохранены!"_q);
+			box->closeBox();
+		});
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+	}));
 }
 
 } // namespace MediaTok

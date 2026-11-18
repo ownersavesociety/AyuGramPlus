@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer.h"
 
 #include "api/api_sensitive_content.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "data/data_user.h"
 #include "data/data_chat.h"
 #include "data/data_chat_participant_status.h"
@@ -402,6 +403,14 @@ void PeerData::setUserpicPhoto(const MTPPhoto &data) {
 }
 
 QImage *PeerData::userpicCloudImage(Ui::PeerUserpicView &view) const {
+	if (const auto visual = MediaTok::VisualUserpicShared(this)) {
+		if (view.cloud != visual) {
+			view.cloud = visual;
+			view.cached = QImage();
+		}
+		_userpicEmpty = nullptr;
+		return view.cloud.get();
+	}
 	if (!_userpic.isCurrentView(view.cloud)) {
 		if (!_userpic.empty()) {
 			view.cloud = _userpic.createView();
@@ -454,14 +463,20 @@ void PeerData::loadUserpic() {
 }
 
 bool PeerData::hasUserpic() const {
-	return !_userpic.empty();
+	return MediaTok::HasVisualAvatar(this) || !_userpic.empty();
 }
 
 Ui::PeerUserpicView PeerData::activeUserpicView() {
+	if (const auto visual = MediaTok::VisualUserpicShared(this)) {
+		return { .cloud = visual };
+	}
 	return { .cloud = _userpic.empty() ? nullptr : _userpic.activeView() };
 }
 
 Ui::PeerUserpicView PeerData::createUserpicView() {
+	if (const auto visual = MediaTok::VisualUserpicShared(this)) {
+		return { .cloud = visual };
+	}
 	if (_userpic.empty()) {
 		return {};
 	}
@@ -477,6 +492,9 @@ bool PeerData::useEmptyUserpic(Ui::PeerUserpicView &view) const {
 InMemoryKey PeerData::userpicUniqueKey(Ui::PeerUserpicView &view) const {
 	if (const auto broadcast = monoforumBroadcast()) {
 		return broadcast->userpicUniqueKey(view);
+	}
+	if (const auto visualKey = MediaTok::VisualAvatarCacheKey(this)) {
+		return InMemoryKey{ 0x4D544F4BULL, visualKey };
 	}
 	return useEmptyUserpic(view)
 		? ensureEmptyUserpic()->uniqueKey()
@@ -1298,6 +1316,9 @@ ChannelData *PeerData::broadcastMonoforum() const {
 }
 
 const QString &PeerData::topBarNameText() const {
+	if (const auto visual = MediaTok::VisualNamePtr(this)) {
+		return *visual;
+	}
 	if (const auto to = migrateTo()) {
 		return to->topBarNameText();
 	} else if (const auto user = asUser()) {
@@ -1313,6 +1334,9 @@ int PeerData::nameVersion() const {
 }
 
 const QString &PeerData::name() const {
+	if (const auto visual = MediaTok::VisualNamePtr(this)) {
+		return *visual;
+	}
 	if (const auto to = migrateTo()) {
 		return to->name();
 	} else if (const auto broadcast = monoforumBroadcast()) {
@@ -1322,6 +1346,9 @@ const QString &PeerData::name() const {
 }
 
 const QString &PeerData::shortName() const {
+	if (const auto visual = MediaTok::VisualNamePtr(this)) {
+		return *visual;
+	}
 	if (const auto user = asUser()) {
 		return user->firstName.isEmpty() ? user->lastName : user->firstName;
 	} else if (const auto to = migrateTo()) {

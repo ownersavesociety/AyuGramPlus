@@ -59,6 +59,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_peer_menu.h"
 #include "ayu/ayu_settings.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/ui/boxes/edit_mark_box.h"
 #include "apiwrap.h"
 #include "api/api_peer_photo.h"
@@ -749,7 +750,7 @@ void SetupRows(
 		rpl::single(u"MediaTok: Свои @юз (1-й, 2-й, 3-й...)"_q),
 		AyuSettings::getInstance().customUsernamesValue(
 		) | rpl::map([](const QString &v) {
-			return tr::marked(v.isEmpty() ? u"Через запятую: @юз1, @юз2, @юз3"_q : v);
+			return tr::marked(v.isEmpty() ? u"@юз1, @юз2  или  +@доп_юз"_q : v);
 		}),
 		u"Изменить @юзернеймы"_q,
 		[=] {
@@ -762,6 +763,24 @@ void SetupRows(
 				}));
 		},
 		{ &st::menuIconUsername });
+
+	AddRow(
+		container,
+		rpl::single(u"MediaTok: Полный визуал + 4K ава"_q),
+		AyuSettings::getInstance().visualProfilesRevisionValue(
+		) | rpl::map([=] {
+			const auto selfPeer = session->user();
+			const auto ov = AyuSettings::getInstance().visualProfile(
+				MediaTok::VisualDialogId(selfPeer));
+			return tr::marked((ov && !ov->empty())
+				? u"Активен (имя / юзы / бейдж / 4K ава)"_q
+				: u"Открыть редактор визуала и 4K авы"_q);
+		}),
+		u"Открыть MediaTok визуал"_q,
+		[=] {
+			MediaTok::ShowVisualProfileBox(controller, session->user());
+		},
+		{ &st::menuIconEdit });
 
 	Ui::AddSkip(container);
 	Ui::AddDividerText(container, tr::lng_settings_username_about());

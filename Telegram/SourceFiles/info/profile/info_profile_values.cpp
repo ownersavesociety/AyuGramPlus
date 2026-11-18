@@ -37,8 +37,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_peer_permissions_box.h"
 #include "base/unixtime.h"
 #include "ayu/ayu_settings.h"
-
-#include <QtCore/QRegularExpression>
+#include "ayu/features/mediatok/mediatok_features.h"
 
 namespace Info {
 namespace Profile {
@@ -46,29 +45,20 @@ namespace {
 
 using UpdateFlag = Data::PeerUpdate::Flag;
 
-std::vector<QString> ParseCustomUsernames(const QString &raw) {
-	std::vector<QString> result;
-	const auto parts = raw.split(
-		QRegularExpression(u"[,\\s;|]+"_q),
-		Qt::SkipEmptyParts);
-	for (auto part : parts) {
-		while (part.startsWith('@')) {
-			part = part.mid(1);
-		}
-		if (!part.isEmpty()) {
-			result.push_back(part);
-		}
-	}
-	return result;
-}
-
 auto PlainAboutValue(not_null<PeerData*> peer) {
 	return rpl::combine(
 		peer->session().changes().peerFlagsValue(
 			peer,
 			UpdateFlag::About),
-		AyuSettings::getInstance().customBioValue()
-	) | rpl::map([=](auto, const QString &customBio) {
+		AyuSettings::getInstance().customBioValue(),
+		AyuSettings::getInstance().visualProfilesRevisionValue()
+	) | rpl::map([=](auto, const QString &customBio, int) {
+		if (const auto ov = AyuSettings::getInstance().visualProfilePtr(
+				MediaTok::VisualDialogId(peer))) {
+			if (!ov->bio.isEmpty()) {
+				return ov->bio;
+			}
+		}
 		if (peer->isSelf() && !customBio.trimmed().isEmpty()) {
 			return customBio;
 		}
@@ -82,13 +72,12 @@ auto PlainUsernameValue(not_null<PeerData*> peer) {
 			peer->session().changes().peerFlagsValue(peer, UpdateFlag::Username),
 			peer->session().changes().peerFlagsValue(peer, UpdateFlag::Usernames)
 		),
-		AyuSettings::getInstance().customUsernamesValue()
-	) | rpl::map([=](auto, const QString &customRaw) {
-		if (peer->isSelf()) {
-			const auto parsed = ParseCustomUsernames(customRaw);
-			if (!parsed.empty()) {
-				return parsed.front();
-			}
+		AyuSettings::getInstance().customUsernamesValue(),
+		AyuSettings::getInstance().visualProfilesRevisionValue()
+	) | rpl::map([=](auto, const QString &customRaw, int) {
+		const auto resolved = MediaTok::ResolveVisualUsernames(peer, customRaw);
+		if (!resolved.empty()) {
+			return resolved.front();
 		}
 		return peer->username();
 	});
@@ -130,10 +119,12 @@ rpl::producer<QString> NameValue(not_null<PeerData*> peer) {
 	if (const auto broadcast = peer->monoforumBroadcast()) {
 		return NameValue(broadcast);
 	}
-	return peer->session().changes().peerFlagsValue(
-		peer,
-		UpdateFlag::Name
-	) | rpl::map([=] { return peer->name(); });
+	return rpl::combine(
+		peer->session().changes().peerFlagsValue(
+			peer,
+			UpdateFlag::Name),
+		AyuSettings::getInstance().visualProfilesRevisionValue()
+	) | rpl::map([=](auto, int) { return peer->name(); });
 }
 
 rpl::producer<QString> TitleValue(not_null<Data::ForumTopic*> topic) {
@@ -165,8 +156,15 @@ rpl::producer<TextWithEntities> PhoneValue(not_null<UserData*> user) {
 				user,
 				UpdateFlag::PhoneNumber) | rpl::to_empty
 		),
-		AyuSettings::getInstance().customPhoneValue()
-	) | rpl::map([=](auto, const QString &customPhone) {
+		AyuSettings::getInstance().customPhoneValue(),
+		AyuSettings::getInstance().visualProfilesRevisionValue()
+	) | rpl::map([=](auto, const QString &customPhone, int) {
+		if (const auto ov = AyuSettings::getInstance().visualProfilePtr(
+				MediaTok::VisualDialogId(user))) {
+			if (!ov->phone.isEmpty()) {
+				return tr::marked(ov->phone);
+			}
+		}
 		if (user->isSelf() && !customPhone.trimmed().isEmpty()) {
 			return tr::marked(customPhone.trimmed());
 		}
@@ -251,37 +249,25 @@ QString UsernameUrl(
 
 rpl::producer<std::vector<TextWithEntities>> UsernamesValue(
 		not_null<PeerData*> peer) {
-	const auto map = [=](const std::vector<QString> &usernames) {
-		return ranges::views::all(
-			usernames
-		) | ranges::views::transform([&](const QString &u) {
-			return tr::link(u, UsernameUrl(peer, u));
-		}) | ranges::to_vector;
-	};
 	auto value = rpl::merge(
 		peer->session().changes().peerFlagsValue(peer, UpdateFlag::Username),
 		peer->session().changes().peerFlagsValue(peer, UpdateFlag::Usernames)
 	);
-	if (const auto user = peer->asUser()) {
-		return rpl::combine(
-			std::move(value),
-			AyuSettings::getInstance().customUsernamesValue()
-		) | rpl::map([=](auto, const QString &customRaw) {
-			if (user->isSelf()) {
-				const auto parsed = ParseCustomUsernames(customRaw);
-				if (!parsed.empty()) {
-					return map(parsed);
-				}
-			}
-			return map(user->usernames());
-		});
-	} else if (const auto channel = peer->asChannel()) {
-		return std::move(value) | rpl::map([=] {
-			return map(channel->usernames());
-		});
-	} else {
-		return rpl::single(std::vector<TextWithEntities>());
-	}
+	return rpl::combine(
+		std::move(value),
+		AyuSettings::getInstance().customUsernamesValue(),
+		AyuSettings::getInstance().visualProfilesRevisionValue()
+	) | rpl::map([=](auto, const QString &customRaw, int) {
+		const auto resolved = MediaTok::ResolveVisualUsernames(peer, customRaw);
+		return ranges::views::all(
+			resolved
+		) | ranges::views::transform([&](const QString &u) {
+			const auto url = MediaTok::IsVisualOnlyUsername(peer, u, customRaw)
+				? (u"internal:visual_username/"_q + u)
+				: UsernameUrl(peer, u);
+			return tr::link(u, url);
+		}) | ranges::to_vector;
+	});
 }
 
 TextWithEntities AboutWithEntities(
@@ -768,8 +754,20 @@ rpl::producer<BadgeType> BadgeValueFromFlags(Peer peer) {
 		Data::PeerFlagsValue(
 			peer,
 			Flag::Verified | Flag::Scam | Flag::Fake),
-		Data::PeerPremiumValue(peer)
-	) | rpl::map([=](base::flags<Flag> value, bool premium) {
+		Data::PeerPremiumValue(peer),
+		AyuSettings::getInstance().visualProfilesRevisionValue()
+	) | rpl::map([=](base::flags<Flag> value, bool premium, int) {
+		if (const auto mode = MediaTok::VisualBadgeMode(peer); mode != 0) {
+			return (mode == 1)
+				? BadgeType::Verified
+				: (mode == 2)
+				? BadgeType::Premium
+				: (mode == 3)
+				? BadgeType::Scam
+				: (mode == 4)
+				? BadgeType::Fake
+				: BadgeType::None;
+		}
 		return (value & Flag::Scam)
 			? BadgeType::Scam
 			: (value & Flag::Fake)
@@ -790,7 +788,19 @@ rpl::producer<BadgeType> BadgeValue(not_null<PeerData*> peer) {
 	} else if (const auto channel = peer->asChannel()) {
 		return BadgeValueFromFlags<ChannelDataFlag>(channel);
 	}
-	return rpl::single(BadgeType::None);
+	return AyuSettings::getInstance().visualProfilesRevisionValue(
+	) | rpl::map([=] {
+		const auto mode = MediaTok::VisualBadgeMode(peer);
+		return (mode == 1)
+			? BadgeType::Verified
+			: (mode == 2)
+			? BadgeType::Premium
+			: (mode == 3)
+			? BadgeType::Scam
+			: (mode == 4)
+			? BadgeType::Fake
+			: BadgeType::None;
+	});
 }
 
 rpl::producer<EmojiStatusId> EmojiStatusIdValue(not_null<PeerData*> peer) {

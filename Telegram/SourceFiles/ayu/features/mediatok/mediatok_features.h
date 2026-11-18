@@ -3,16 +3,20 @@
 
 #include "api/api_common.h"
 #include "base/basic_types.h"
+#include "data/data_types.h"
 #include "dialogs/dialogs_key.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QSize>
 #include <QtCore/QString>
 
+#include <memory>
 #include <optional>
 #include <vector>
 
 class HistoryItem;
 class PeerData;
+class QImage;
 
 namespace Main {
 class Session;
@@ -97,5 +101,27 @@ void SearchUserMessagesInChat(
 	not_null<Window::SessionController*> controller,
 	const Dialogs::Key &chat,
 	not_null<PeerData*> targetUser);
+
+[[nodiscard]] int64 VisualDialogId(not_null<const PeerData*> peer);
+[[nodiscard]] const QString *VisualNamePtr(not_null<const PeerData*> peer);
+[[nodiscard]] int VisualBadgeMode(not_null<const PeerData*> peer);
+[[nodiscard]] std::vector<QString> ResolveVisualUsernames(
+	not_null<const PeerData*> peer,
+	const QString &legacySelfRaw);
+[[nodiscard]] bool IsVisualOnlyUsername(
+	not_null<const PeerData*> peer,
+	const QString &username,
+	const QString &legacySelfRaw);
+[[nodiscard]] bool HasVisualAvatar(not_null<const PeerData*> peer);
+[[nodiscard]] std::shared_ptr<QImage> VisualUserpicShared(
+	not_null<const PeerData*> peer);
+[[nodiscard]] uint64 VisualAvatarCacheKey(not_null<const PeerData*> peer);
+[[nodiscard]] bool IsVisualAvatarPhotoId(PhotoId id);
+void OpenVisualAvatar4k(
+	not_null<Window::SessionController*> controller,
+	not_null<PeerData*> peer);
+void ShowVisualProfileBox(
+	not_null<Window::SessionController*> controller,
+	not_null<PeerData*> peer);
 
 } // namespace MediaTok

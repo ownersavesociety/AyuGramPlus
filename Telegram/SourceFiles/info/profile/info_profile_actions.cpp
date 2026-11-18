@@ -209,6 +209,20 @@ base::options::toggle ShowChannelJoinedBelowAbout({
 		const QString &addToLink) {
 	const auto weak = base::make_weak(controller);
 	return [=](QString link) {
+		if (link.startsWith(u"internal:visual_username/"_q)) {
+			const auto uname = link.mid(u"internal:visual_username/"_q.size());
+			link = peer->session().createInternalLinkFull(uname) + addToLink;
+		} else if (link.startsWith(u"internal:collectible_username/"_q)) {
+			const auto tail = link.mid(u"internal:collectible_username/"_q.size());
+			const auto at = tail.indexOf('@');
+			const auto uname = (at >= 0) ? tail.left(at) : tail;
+			if (MediaTok::IsVisualOnlyUsername(
+					peer,
+					uname,
+					AyuSettings::getInstance().customUsernames())) {
+				link = peer->session().createInternalLinkFull(uname) + addToLink;
+			}
+		}
 		if (link.startsWith(u"internal:"_q)) {
 			Core::App().openInternalUrl(link,
 				QVariant::fromValue(ClickHandlerContext{
