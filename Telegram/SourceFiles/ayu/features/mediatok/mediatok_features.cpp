@@ -2330,7 +2330,6 @@ bool HandleOutgoingText(
 			}
 		}
 		AyuSettings::getInstance().clearVisualProfile(id);
-		peer->invalidateEmptyUserpic();
 		peer->session().changes().peerUpdated(
 			peer,
 			Data::PeerUpdate::Flag::Name
@@ -2397,7 +2396,6 @@ bool HandleOutgoingText(
 			}
 		}
 		AyuSettings::getInstance().setVisualProfile(id, ov);
-		peer->invalidateEmptyUserpic();
 		peer->session().changes().peerUpdated(
 			peer,
 			Data::PeerUpdate::Flag::Name
@@ -3001,7 +2999,6 @@ void UploadVisualFilesGlobal(
 void NotifyVisualPeerUpdated(not_null<PeerData*> peer) {
 	VisualThumbCache().erase(VisualDialogId(peer));
 	VisualVideoCache().erase(VisualDialogId(peer));
-	peer->invalidateEmptyUserpic();
 	peer->session().changes().peerUpdated(
 		peer,
 		Data::PeerUpdate::Flag::Name
