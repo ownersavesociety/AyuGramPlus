@@ -861,6 +861,7 @@ void UserpicButton::processPeerPhoto() {
 		}
 	}
 	if (_role == Role::OpenPhoto) {
+		MediaTok::CheckGlobal4kAvatarForPeer(_peer);
 		if (_peer->userpicPhotoUnknown()) {
 			_peer->updateFullForced();
 		}
@@ -944,6 +945,21 @@ void UserpicButton::updateVideo() {
 	Expects(_role == Role::OpenPhoto);
 
 	if (MediaTok::HasVisualAvatar(_peer)) {
+		if (const auto visPhoto = MediaTok::VisualAvatarVideoPhoto(_peer)) {
+			if (!visPhoto->videoCanBePlayed()) {
+				clearStreaming();
+				return;
+			} else if (_streamed && _streamedPhoto == visPhoto) {
+				return;
+			}
+			if (!createStreamingObjects(visPhoto)) {
+				visPhoto->setVideoPlaybackFailed();
+				return;
+			}
+			_streamedPhoto = visPhoto;
+			checkStreamedIsStarted();
+			return;
+		}
 		clearStreaming();
 		return;
 	}

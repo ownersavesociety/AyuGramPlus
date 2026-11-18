@@ -25,10 +25,10 @@ namespace Editor {
 
 struct VideoEditorDescriptor;
 
-inline constexpr auto kProfileVideoSide = 800;
+inline constexpr auto kProfileVideoSide = 1280;
 inline constexpr auto kProfileVideoMaxDuration = crl::time(9600);
 inline constexpr auto kProfileVideoMinDuration = crl::time(1000);
-inline constexpr auto kProfileVideoFps = 30.;
+inline constexpr auto kProfileVideoFps = 60.;
 
 struct ProfileMedia {
 	QImage image;

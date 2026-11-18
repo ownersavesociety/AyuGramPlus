@@ -28,7 +28,7 @@ using namespace FFmpeg;
 
 constexpr auto kVideoTimeBase = AVRational{ 1, 1'000'000 };
 constexpr auto kMinBitrate = 600'000;
-constexpr auto kMaxBitrate = 6'800'000;
+constexpr auto kMaxBitrate = 16'000'000;
 constexpr auto kWebmStickerCrf = 28;
 constexpr auto kWebmStickerCrfLadder = std::array<std::optional<int>, 6>{
 	std::nullopt,
@@ -91,7 +91,7 @@ constexpr auto kSilentAudioFillMargin = crl::time(1000);
 
 [[nodiscard]] int TargetBitrate(QSize size, float64 fps) {
 	const auto pixels = int64(size.width()) * size.height();
-	const auto bits = float64(pixels) * SanitizedFps(fps) * 0.07;
+	const auto bits = float64(pixels) * SanitizedFps(fps) * 0.14;
 	return int(std::clamp(bits, float64(kMinBitrate), float64(kMaxBitrate)));
 }
 

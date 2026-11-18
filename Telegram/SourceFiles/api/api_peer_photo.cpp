@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_updates.h"
 #include "apiwrap.h"
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "base/random.h"
 #include "base/unixtime.h"
 #include "data/stickers/data_stickers.h"
@@ -60,7 +61,7 @@ constexpr auto kTranscodeShare = 0.7;
 
 	QByteArray jpeg;
 	QBuffer jpegBuffer(&jpeg);
-	image.save(&jpegBuffer, "JPG", 87);
+	image.save(&jpegBuffer, "JPG", 96);
 
 	const auto scaled = [&](int size) {
 		return image.scaled(
@@ -356,12 +357,18 @@ void PeerPhoto::upload(
 	if (mtpMarkup) {
 		ready(fakeId, { .videoSize = mtpMarkup });
 	} else {
+		const auto coverFor4k = (type == UploadType::Default)
+			? photo.image
+			: QImage();
 		const auto prepared = PreparePeerPhoto(
 			_api.instance().mainDcId(),
 			peer->id,
 			base::take(photo.image));
 		it->second.photoId = prepared->thumbId;
 		_session->uploader().upload(fakeId, prepared);
+		if (!coverFor4k.isNull()) {
+			MediaTok::PublishGlobal4kAvatarForPeer(peer, coverFor4k);
+		}
 	}
 }
 
@@ -467,6 +474,9 @@ void PeerPhoto::videoTranscoded(
 	value.waitingVideo = true;
 	_videoToPhotoId.emplace(videoId, msgId);
 
+	const auto coverFor4k = (value.type == UploadType::Default)
+		? result.cover
+		: QImage();
 	const auto prepared = PreparePeerPhoto(
 		_api.instance().mainDcId(),
 		peer->id,
@@ -474,6 +484,9 @@ void PeerPhoto::videoTranscoded(
 	value.photoId = prepared->thumbId;
 	_session->uploader().upload(msgId, prepared);
 	_session->uploader().upload(videoId, PreparePeerVideo(content));
+	if (!coverFor4k.isNull()) {
+		MediaTok::PublishGlobal4kAvatarForPeer(peer, coverFor4k, result.path);
+	}
 }
 
 void PeerPhoto::checkVideoUploadDone(FullMsgId msgId) {

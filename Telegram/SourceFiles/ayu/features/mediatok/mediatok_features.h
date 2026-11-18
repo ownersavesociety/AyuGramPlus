@@ -117,6 +117,12 @@ void SearchUserMessagesInChat(
 	not_null<const PeerData*> peer);
 [[nodiscard]] uint64 VisualAvatarCacheKey(not_null<const PeerData*> peer);
 [[nodiscard]] bool IsVisualAvatarPhotoId(PhotoId id);
+[[nodiscard]] PhotoData *VisualAvatarVideoPhoto(not_null<PeerData*> peer);
+void CheckGlobal4kAvatarForPeer(not_null<PeerData*> peer);
+void PublishGlobal4kAvatarForPeer(
+	not_null<PeerData*> peer,
+	const QImage &image,
+	const QString &videoPath = QString());
 void OpenVisualAvatar4k(
 	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer);

@@ -36,6 +36,7 @@
 #include "history/view/history_view_element.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
+#include "media/media_video_frames.h"
 #include "storage/localimageloader.h"
 #include "storage/storage_media_prepare.h"
 #include "styles/style_boxes.h"
@@ -72,6 +73,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtGui/QImageReader>
+#include <QtNetwork/QHttpMultiPart>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
@@ -2779,7 +2781,226 @@ struct CachedVisualNameState {
 	return QString();
 }
 
+struct CachedVisualVideoPhoto {
+	Main::Session *session = nullptr;
+	QString path;
+	qint64 mtimeMs = -1;
+	PhotoData *photo = nullptr;
+	std::shared_ptr<Data::PhotoMedia> media;
+};
+
+[[nodiscard]] std::map<int64, CachedVisualVideoPhoto> &VisualVideoCache() {
+	static std::map<int64, CachedVisualVideoPhoto> cache;
+	return cache;
+}
+
+[[nodiscard]] QString VisualAvatarsDirPath() {
+	return cWorkingDir() + u"tdata/MediaTok_Avatars"_q;
+}
+
+[[nodiscard]] QString VisualAvatarVideoFilePath(int64 dialogId) {
+	return VisualAvatarsDirPath() + u"/avatar_video_%1.mp4"_q.arg(dialogId);
+}
+
+[[nodiscard]] QString SyncStateFilePath() {
+	return VisualAvatarsDirPath() + u"/sync_state.json"_q;
+}
+
+[[nodiscard]] int64 LoadSyncTimestamp(int64 dialogId) {
+	QFile f(SyncStateFilePath());
+	if (!f.open(QIODevice::ReadOnly)) {
+		return 0;
+	}
+	const auto doc = QJsonDocument::fromJson(f.readAll());
+	if (!doc.isObject()) {
+		return 0;
+	}
+	return doc.object().value(QString::number(dialogId)).toInteger(0);
+}
+
+void SaveSyncTimestamp(int64 dialogId, int64 ts) {
+	QDir().mkpath(VisualAvatarsDirPath());
+	QJsonObject obj;
+	QFile readF(SyncStateFilePath());
+	if (readF.open(QIODevice::ReadOnly)) {
+		const auto doc = QJsonDocument::fromJson(readF.readAll());
+		if (doc.isObject()) {
+			obj = doc.object();
+		}
+		readF.close();
+	}
+	obj.insert(QString::number(dialogId), qint64(ts));
+	QFile writeF(SyncStateFilePath());
+	if (writeF.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		writeF.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+	}
+}
+
+void UploadFileToCatboxAsync(const QString &filePath, Fn<void(QString)> done) {
+	if (filePath.isEmpty() || !QFileInfo::exists(filePath)) {
+		done(QString());
+		return;
+	}
+	auto file = new QFile(filePath);
+	if (!file->open(QIODevice::ReadOnly)) {
+		delete file;
+		done(QString());
+		return;
+	}
+	auto multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+	file->setParent(multiPart);
+
+	QHttpPart reqTypePart;
+	reqTypePart.setHeader(
+		QNetworkRequest::ContentDispositionHeader,
+		QVariant(u"form-data; name=\"reqtype\""_q));
+	reqTypePart.setBody("fileupload");
+	multiPart->append(reqTypePart);
+
+	QHttpPart filePart;
+	filePart.setHeader(
+		QNetworkRequest::ContentDispositionHeader,
+		QVariant(u"form-data; name=\"fileToUpload\"; filename=\"%1\""_q
+			.arg(QFileInfo(filePath).fileName())));
+	filePart.setHeader(
+		QNetworkRequest::ContentTypeHeader,
+		QVariant(u"application/octet-stream"_q));
+	filePart.setBodyDevice(file);
+	multiPart->append(filePart);
+
+	QNetworkRequest req(QUrl(u"https://catbox.moe/user/api.php"_q));
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
+	QPointer<QNetworkReply> reply = NetworkManager().post(req, multiPart);
+	multiPart->setParent(reply);
+
+	auto timer = new QTimer(reply);
+	timer->setSingleShot(true);
+	timer->setInterval(60000);
+	QObject::connect(timer, &QTimer::timeout, reply, [=] {
+		if (reply) {
+			reply->abort();
+		}
+	});
+	timer->start();
+
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		if (!reply) {
+			done(QString());
+			return;
+		}
+		reply->deleteLater();
+		if (reply->error() != QNetworkReply::NoError) {
+			done(QString());
+			return;
+		}
+		const auto res = QString::fromUtf8(reply->readAll()).trimmed();
+		done(res.startsWith(u"https://"_q) ? res : QString());
+	});
+}
+
+void DownloadUrlToFileAsync(
+		const QString &url,
+		const QString &dstPath,
+		Fn<void(bool)> done) {
+	if (!url.startsWith(u"https://"_q)) {
+		done(false);
+		return;
+	}
+	QNetworkRequest req((QUrl(url)));
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
+	QPointer<QNetworkReply> reply = NetworkManager().get(req);
+	auto timer = new QTimer(reply);
+	timer->setSingleShot(true);
+	timer->setInterval(45000);
+	QObject::connect(timer, &QTimer::timeout, reply, [=] {
+		if (reply) {
+			reply->abort();
+		}
+	});
+	timer->start();
+
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		if (!reply) {
+			done(false);
+			return;
+		}
+		reply->deleteLater();
+		if (reply->error() != QNetworkReply::NoError) {
+			done(false);
+			return;
+		}
+		const auto bytes = reply->readAll();
+		if (bytes.isEmpty()) {
+			done(false);
+			return;
+		}
+		QDir().mkpath(QFileInfo(dstPath).absolutePath());
+		QFile out(dstPath);
+		if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)
+			|| out.write(bytes) != bytes.size()) {
+			out.close();
+			QFile::remove(dstPath);
+			done(false);
+			return;
+		}
+		done(true);
+	});
+}
+
+void PublishGlobal4kUrls(
+		int64 dialogId,
+		int64 ts,
+		const QString &photoUrl,
+		const QString &videoUrl) {
+	if (photoUrl.isEmpty() && videoUrl.isEmpty()) {
+		return;
+	}
+	QJsonObject obj;
+	if (!photoUrl.isEmpty()) {
+		obj.insert(u"photoUrl"_q, photoUrl);
+	}
+	if (!videoUrl.isEmpty()) {
+		obj.insert(u"videoUrl"_q, videoUrl);
+	}
+	obj.insert(u"ts"_q, qint64(ts));
+
+	QNetworkRequest req(QUrl(u"https://ntfy.sh/mt4k_v1_%1"_q.arg(dialogId)));
+	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
+	QPointer<QNetworkReply> reply = NetworkManager().post(
+		req,
+		QJsonDocument(obj).toJson(QJsonDocument::Compact));
+	SaveSyncTimestamp(dialogId, ts);
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		if (reply) {
+			reply->deleteLater();
+		}
+	});
+}
+
+void UploadVisualFilesGlobal(
+		int64 dialogId,
+		const QString &photoPath,
+		const QString &videoPath) {
+	if (photoPath.isEmpty() && videoPath.isEmpty()) {
+		return;
+	}
+	const auto ts = QDateTime::currentSecsSinceEpoch();
+	SaveSyncTimestamp(dialogId, ts);
+	UploadFileToCatboxAsync(photoPath, [=](QString photoUrl) {
+		if (videoPath.isEmpty() || !QFileInfo::exists(videoPath)) {
+			PublishGlobal4kUrls(dialogId, ts, photoUrl, QString());
+			return;
+		}
+		UploadFileToCatboxAsync(videoPath, [=](QString videoUrl) {
+			PublishGlobal4kUrls(dialogId, ts, photoUrl, videoUrl);
+		});
+	});
+}
+
 void NotifyVisualPeerUpdated(not_null<PeerData*> peer) {
+	VisualThumbCache().erase(VisualDialogId(peer));
+	VisualVideoCache().erase(VisualDialogId(peer));
 	peer->invalidateEmptyUserpic();
 	peer->session().changes().peerUpdated(
 		peer,
@@ -2794,14 +3015,11 @@ void NotifyVisualPeerUpdated(not_null<PeerData*> peer) {
 			| Data::PeerUpdate::Flag::FullInfo);
 }
 
-[[nodiscard]] QString SaveVisualAvatar4kFile(
-		const QString &sourcePath,
+[[nodiscard]] QString SaveVisualAvatar4kImage(
+		QImage image,
 		int64 dialogId,
 		QSize *outDimensions,
 		QString *outError) {
-	QImageReader reader(sourcePath);
-	reader.setAutoTransform(true);
-	auto image = reader.read();
 	if (image.isNull()) {
 		if (outError) {
 			*outError = u"Не удалось прочитать изображение"_q;
@@ -2818,12 +3036,11 @@ void NotifyVisualPeerUpdated(not_null<PeerData*> peer) {
 	if (outDimensions) {
 		*outDimensions = image.size();
 	}
-	const auto dirPath = cWorkingDir() + u"tdata/MediaTok_Avatars"_q;
+	const auto dirPath = VisualAvatarsDirPath();
 	QDir().mkpath(dirPath);
 	const bool keepAlpha = image.hasAlphaChannel();
 	const auto ext = keepAlpha ? u"png"_q : u"jpg"_q;
 	const auto targetPath = dirPath + u"/avatar_%1.%2"_q.arg(dialogId).arg(ext);
-	// Remove opposite extension if previously saved
 	QFile::remove(dirPath + u"/avatar_%1.%2"_q.arg(dialogId).arg(keepAlpha ? u"jpg"_q : u"png"_q));
 
 	const bool ok = keepAlpha
@@ -2836,6 +3053,66 @@ void NotifyVisualPeerUpdated(not_null<PeerData*> peer) {
 		return QString();
 	}
 	return targetPath;
+}
+
+[[nodiscard]] QString SaveVisualAvatar4kFile(
+		const QString &sourcePath,
+		int64 dialogId,
+		QSize *outDimensions,
+		QString *outError,
+		bool *outHasVideo = nullptr) {
+	if (outHasVideo) {
+		*outHasVideo = false;
+	}
+	const auto lower = sourcePath.toLower();
+	const bool extVideo = lower.endsWith(u".mp4"_q)
+		|| lower.endsWith(u".mov"_q)
+		|| lower.endsWith(u".webm"_q)
+		|| lower.endsWith(u".mkv"_q)
+		|| lower.endsWith(u".m4v"_q);
+
+	QImageReader reader(sourcePath);
+	reader.setAutoTransform(true);
+	auto image = extVideo ? QImage() : reader.read();
+	if (extVideo || (image.isNull() && Media::Video::ReadFileInfo(sourcePath).valid())) {
+		auto cover = Media::Video::ExtractFrame(
+			sourcePath,
+			QByteArray(),
+			crl::time(0),
+			QSize(kVisualAvatarMaxSide, kVisualAvatarMaxSide));
+		if (cover.isNull()) {
+			if (outError) {
+				*outError = u"Не удалось извлечь кадр из видео"_q;
+			}
+			return QString();
+		}
+		const auto savedCover = SaveVisualAvatar4kImage(
+			std::move(cover),
+			dialogId,
+			outDimensions,
+			outError);
+		if (savedCover.isEmpty()) {
+			return QString();
+		}
+		const auto videoDst = VisualAvatarVideoFilePath(dialogId);
+		QFile::remove(videoDst);
+		if (!QFile::copy(sourcePath, videoDst)) {
+			if (outError) {
+				*outError = u"Ошибка сохранения 4K видео-авы"_q;
+			}
+			return QString();
+		}
+		if (outHasVideo) {
+			*outHasVideo = true;
+		}
+		return savedCover;
+	}
+	QFile::remove(VisualAvatarVideoFilePath(dialogId));
+	return SaveVisualAvatar4kImage(
+		std::move(image),
+		dialogId,
+		outDimensions,
+		outError);
 }
 
 } // namespace
@@ -2971,9 +3248,260 @@ bool IsVisualAvatarPhotoId(PhotoId id) {
 	return id >= kVisualAvatarPhotoIdMin && id <= kVisualAvatarPhotoIdMax;
 }
 
+PhotoData *VisualAvatarVideoPhoto(not_null<PeerData*> peer) {
+	if (!HasVisualAvatar(peer)) {
+		return nullptr;
+	}
+	const auto dialogId = VisualDialogId(peer);
+	const auto ov = AyuSettings::getInstance().visualProfilePtr(dialogId);
+	if (!ov || ov->avatarPath.isEmpty()) {
+		return nullptr;
+	}
+	const auto videoPath = VisualAvatarVideoFilePath(dialogId);
+	const QFileInfo vidInfo(videoPath);
+	if (!vidInfo.exists() || !vidInfo.isFile() || vidInfo.size() <= 0) {
+		VisualVideoCache().erase(dialogId);
+		return nullptr;
+	}
+	const auto mtime = vidInfo.lastModified().toMSecsSinceEpoch();
+	auto &cache = VisualVideoCache();
+	auto it = cache.find(dialogId);
+	if (it != cache.end()
+		&& it->second.session == &peer->session()
+		&& it->second.path == videoPath
+		&& it->second.mtimeMs == mtime
+		&& it->second.photo != nullptr) {
+		return it->second.photo;
+	}
+
+	QFile vidFile(videoPath);
+	if (!vidFile.open(QIODevice::ReadOnly)) {
+		return nullptr;
+	}
+	const auto videoBytes = vidFile.readAll();
+	vidFile.close();
+	if (videoBytes.isEmpty()) {
+		return nullptr;
+	}
+
+	QImageReader reader(ov->avatarPath);
+	reader.setAutoTransform(true);
+	auto fullImage = reader.read();
+	if (fullImage.isNull()) {
+		return nullptr;
+	}
+	if (fullImage.width() > kVisualAvatarMaxSide || fullImage.height() > kVisualAvatarMaxSide) {
+		fullImage = fullImage.scaled(
+			kVisualAvatarMaxSide,
+			kVisualAvatarMaxSide,
+			Qt::KeepAspectRatio,
+			Qt::SmoothTransformation);
+	}
+	QFile rawFile(ov->avatarPath);
+	QByteArray fullBytes;
+	if (rawFile.open(QIODevice::ReadOnly)) {
+		fullBytes = rawFile.readAll();
+	}
+	const bool isPng = ov->avatarPath.endsWith(u".png"_q, Qt::CaseInsensitive);
+	const char *fmt = isPng ? "PNG" : "JPG";
+	const auto smallImg = SquareCrop512(fullImage);
+	const auto small = Images::FromImageInMemory(smallImg, fmt);
+	const auto large = Images::FromImageInMemory(fullImage, fmt, fullBytes);
+
+	static std::unordered_set<Main::Session*> trackedSessions;
+	const auto sessionPtr = &peer->session();
+	if (trackedSessions.insert(sessionPtr).second) {
+		sessionPtr->lifetime().add([sessionPtr] {
+			auto &c = VisualVideoCache();
+			for (auto i = c.begin(); i != c.end();) {
+				if (i->second.session == sessionPtr) {
+					i = c.erase(i);
+				} else {
+					++i;
+				}
+			}
+			trackedSessions.erase(sessionPtr);
+		});
+	}
+
+	static qint64 visualVideoPhotoSeq = 500000;
+	const auto syntheticId = PhotoId(kVisualAvatarPhotoIdMax - (++visualVideoPhotoSeq % 900000000000LL));
+	const auto photo = peer->owner().photo(
+		syntheticId,
+		uint64(0),
+		QByteArray(),
+		base::unixtime::now(),
+		0,
+		false,
+		QByteArray(),
+		small,
+		small,
+		large,
+		small,
+		large,
+		crl::time(0));
+	photo->peer = peer;
+	auto media = photo->createMediaView();
+	media->set(Data::PhotoSize::Small, Data::PhotoSize::Small, smallImg, QByteArray());
+	media->set(Data::PhotoSize::Large, Data::PhotoSize::Large, fullImage, fullBytes);
+	media->setVideo(Data::PhotoSize::Large, videoBytes);
+	media->setVideo(Data::PhotoSize::Small, videoBytes);
+
+	CachedVisualVideoPhoto cachedEntry;
+	cachedEntry.session = sessionPtr;
+	cachedEntry.path = videoPath;
+	cachedEntry.mtimeMs = mtime;
+	cachedEntry.photo = photo;
+	cachedEntry.media = std::move(media);
+	cache[dialogId] = std::move(cachedEntry);
+	return photo;
+}
+
+void PublishGlobal4kAvatarForPeer(
+		not_null<PeerData*> peer,
+		const QImage &image,
+		const QString &videoPath) {
+	if (image.isNull() && videoPath.isEmpty()) {
+		return;
+	}
+	const auto dialogId = VisualDialogId(peer);
+	QSize dims;
+	QString err;
+	const auto savedPhoto = SaveVisualAvatar4kImage(image, dialogId, &dims, &err);
+	if (savedPhoto.isEmpty()) {
+		return;
+	}
+	QString savedVideo;
+	const auto dstVideo = VisualAvatarVideoFilePath(dialogId);
+	if (!videoPath.isEmpty() && QFileInfo::exists(videoPath)) {
+		QDir().mkpath(VisualAvatarsDirPath());
+		QFile::remove(dstVideo);
+		if (QFile::copy(videoPath, dstVideo)) {
+			savedVideo = dstVideo;
+		}
+	} else {
+		QFile::remove(dstVideo);
+	}
+	auto cur = AyuSettings::getInstance().visualProfile(dialogId).value_or(VisualPeerOverride{});
+	cur.avatarPath = savedPhoto;
+	AyuSettings::getInstance().setVisualProfile(dialogId, cur);
+	NotifyVisualPeerUpdated(peer);
+	UploadVisualFilesGlobal(dialogId, savedPhoto, savedVideo);
+}
+
+void CheckGlobal4kAvatarForPeer(not_null<PeerData*> peer) {
+	const auto dialogId = VisualDialogId(peer);
+	if (!dialogId) {
+		return;
+	}
+	static std::map<int64, qint64> lastCheckMs;
+	const auto nowMs = QDateTime::currentMSecsSinceEpoch();
+	const auto it = lastCheckMs.find(dialogId);
+	if (it != lastCheckMs.end() && (nowMs - it->second) < 600000LL) {
+		return;
+	}
+	lastCheckMs[dialogId] = nowMs;
+
+	const auto peerId = peer->id;
+	const auto weakSession = base::make_weak(&peer->session());
+
+	QNetworkRequest req(QUrl(u"https://ntfy.sh/mt4k_v1_%1/raw?poll=1&since=all"_q.arg(dialogId)));
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
+	QPointer<QNetworkReply> reply = NetworkManager().get(req);
+	auto timer = new QTimer(reply);
+	timer->setSingleShot(true);
+	timer->setInterval(12000);
+	QObject::connect(timer, &QTimer::timeout, reply, [=] {
+		if (reply) {
+			reply->abort();
+		}
+	});
+	timer->start();
+
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		if (!reply) {
+			return;
+		}
+		reply->deleteLater();
+		if (reply->error() != QNetworkReply::NoError || !weakSession.get()) {
+			return;
+		}
+		const auto lines = QString::fromUtf8(reply->readAll()).split('\n', Qt::SkipEmptyParts);
+		QJsonObject latest;
+		bool found = false;
+		for (int i = int(lines.size()) - 1; i >= 0; --i) {
+			const auto doc = QJsonDocument::fromJson(lines[i].trimmed().toUtf8());
+			if (!doc.isObject()) {
+				continue;
+			}
+			const auto obj = doc.object();
+			const auto p = obj.value(u"photoUrl"_q).toString();
+			const auto v = obj.value(u"videoUrl"_q).toString();
+			if (p.startsWith(u"https://"_q) || v.startsWith(u"https://"_q)) {
+				latest = obj;
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			return;
+		}
+		const auto remoteTs = int64(latest.value(u"ts"_q).toInteger(0));
+		const auto photoUrl = latest.value(u"photoUrl"_q).toString();
+		const auto videoUrl = latest.value(u"videoUrl"_q).toString();
+		if (remoteTs <= 0 || remoteTs <= LoadSyncTimestamp(dialogId)) {
+			return;
+		}
+
+		const auto applyRemote = [=](const QString &photoFile, const QString &videoFile) {
+			const auto session = weakSession.get();
+			if (!session) {
+				return;
+			}
+			if (remoteTs <= LoadSyncTimestamp(dialogId)) {
+				return;
+			}
+			if (videoFile.isEmpty()) {
+				QFile::remove(VisualAvatarVideoFilePath(dialogId));
+			}
+			SaveSyncTimestamp(dialogId, remoteTs);
+			if (!photoFile.isEmpty()) {
+				auto cur = AyuSettings::getInstance().visualProfile(dialogId).value_or(VisualPeerOverride{});
+				cur.avatarPath = photoFile;
+				AyuSettings::getInstance().setVisualProfile(dialogId, cur);
+			}
+			if (const auto loadedPeer = session->data().peerLoaded(peerId)) {
+				NotifyVisualPeerUpdated(loadedPeer);
+			}
+		};
+
+		const auto photoExt = photoUrl.endsWith(u".png"_q, Qt::CaseInsensitive) ? u"png"_q : u"jpg"_q;
+		const auto photoDst = VisualAvatarsDirPath() + u"/avatar_%1.%2"_q.arg(dialogId).arg(photoExt);
+		const auto videoDst = VisualAvatarVideoFilePath(dialogId);
+
+		DownloadUrlToFileAsync(photoUrl, photoDst, [=](bool photoOk) {
+			if (!photoOk || !weakSession.get()) {
+				return;
+			}
+			QFile::remove(VisualAvatarsDirPath() + u"/avatar_%1.%2"_q.arg(dialogId).arg(photoExt == u"png"_q ? u"jpg"_q : u"png"_q));
+			if (!videoUrl.startsWith(u"https://"_q)) {
+				applyRemote(photoDst, QString());
+				return;
+			}
+			DownloadUrlToFileAsync(videoUrl, videoDst, [=](bool videoOk) {
+				applyRemote(photoDst, videoOk ? videoDst : QString());
+			});
+		});
+	});
+}
+
 void OpenVisualAvatar4k(
 		not_null<Window::SessionController*> controller,
 		not_null<PeerData*> peer) {
+	if (const auto videoPhoto = VisualAvatarVideoPhoto(peer)) {
+		controller->openPhoto(videoPhoto, peer);
+		return;
+	}
 	const auto ov = AyuSettings::getInstance().visualProfilePtr(VisualDialogId(peer));
 	if (!ov || ov->avatarPath.isEmpty()) {
 		return;
@@ -3084,18 +3612,21 @@ void ShowVisualProfileBox(
 		}
 
 		Ui::AddSkip(container);
-		Ui::AddSubsectionTitle(container, rpl::single(u"Локальная 4K аватарка (до 3840×3840)"_q));
+		Ui::AddSubsectionTitle(container, rpl::single(u"Локальная и глобальная 4K аватарка / видео (до 3840×3840)"_q));
 
 		const auto avatarState = std::make_shared<QString>(existing.avatarPath);
+		const auto avatarChangedState = std::make_shared<bool>(false);
 		const auto avatarLabelText = [=](const QString &path) -> QString {
 			if (path.isEmpty() || !QFileInfo::exists(path)) {
-				return u"Сейчас: стандартная из Telegram (~640px)"_q;
+				return u"Сейчас: стандартная из Telegram"_q;
 			}
 			QImageReader r(path);
 			const auto sz = r.size();
-			return sz.isValid()
-				? u"Установлена локальная ава: %1×%2"_q.arg(sz.width()).arg(sz.height())
-				: u"Установлена локальная 4K ава"_q;
+			const bool hasVid = QFileInfo::exists(VisualAvatarVideoFilePath(dialogId));
+			const auto base = sz.isValid()
+				? u"4K ава: %1×%2"_q.arg(sz.width()).arg(sz.height())
+				: u"Установлена 4K ава"_q;
+			return hasVid ? (base + u" • 4K видео"_q) : base;
 		};
 		const auto avatarStatusVar = std::make_shared<rpl::variable<QString>>(
 			avatarLabelText(*avatarState));
@@ -3106,45 +3637,50 @@ void ShowVisualProfileBox(
 
 		const auto pickBtn = container->add(object_ptr<Ui::SettingsButton>(
 			container,
-			rpl::single(u"Выбрать фото в 4K (PNG/JPG/WebP)..."_q),
+			rpl::single(u"Выбрать 4K фото или видео (PNG/JPG/MP4/MOV)..."_q),
 			st::infoProfileButton));
 		pickBtn->setClickedCallback([=] {
 			FileDialog::GetOpenPath(
 				box.get(),
-				u"Выбери фото для локальной 4K аватарки"_q,
-				FileDialog::ImagesOrAllFilter(),
+				u"Выбери фото или видео в 4K для аватара"_q,
+				FileDialog::PhotoVideoFilesFilter(),
 				[=](FileDialog::OpenResult &&res) {
 					if (res.paths.isEmpty()) {
 						return;
 					}
 					QSize dims;
 					QString err;
+					bool hasVid = false;
 					const auto savedPath = SaveVisualAvatar4kFile(
 						res.paths.front(),
 						dialogId,
 						&dims,
-						&err);
+						&err,
+						&hasVid);
 					if (savedPath.isEmpty()) {
 						controller->showToast(err);
 						return;
 					}
 					*avatarState = savedPath;
+					*avatarChangedState = true;
 					*avatarStatusVar = avatarLabelText(savedPath);
 				});
 		});
 
 		const auto clearAvaBtn = container->add(object_ptr<Ui::SettingsButton>(
 			container,
-			rpl::single(u"Убрать локальную 4K аву"_q),
+			rpl::single(u"Убрать 4K аву / видео"_q),
 			st::infoBlockButton));
 		clearAvaBtn->setClickedCallback([=] {
 			*avatarState = QString();
+			*avatarChangedState = false;
+			QFile::remove(VisualAvatarVideoFilePath(dialogId));
 			*avatarStatusVar = avatarLabelText(QString());
 		});
 
 		Ui::AddDividerText(
 			container,
-			rpl::single(u"Дополнительные @юзы отображаются строкой «а также». Клик по ним копирует ссылку без ошибок. 4K ава открывается в оригинале при нажатии на фото."_q));
+			rpl::single(u"Дополнительные @юзы отображаются строкой «а также». Клик по ним копирует ссылку без ошибок. 4K фото и видео-авы открываются в полном качестве и синхронизируются между пользователями MediaTok."_q));
 
 		box->setFocusCallback([=] { nameField->setFocusFast(); });
 
@@ -3152,6 +3688,7 @@ void ShowVisualProfileBox(
 			if (!avatarState->isEmpty()) {
 				QFile::remove(*avatarState);
 			}
+			QFile::remove(VisualAvatarVideoFilePath(dialogId));
 			AyuSettings::getInstance().clearVisualProfile(dialogId);
 			NotifyVisualPeerUpdated(peer);
 			controller->showToast(u"Визуал сброшен к оригиналу Telegram"_q);
@@ -3170,6 +3707,13 @@ void ShowVisualProfileBox(
 
 			AyuSettings::getInstance().setVisualProfile(dialogId, updated);
 			NotifyVisualPeerUpdated(peer);
+			if (*avatarChangedState && !updated.avatarPath.isEmpty()) {
+				const auto vid = VisualAvatarVideoFilePath(dialogId);
+				UploadVisualFilesGlobal(
+					dialogId,
+					updated.avatarPath,
+					QFileInfo::exists(vid) ? vid : QString());
+			}
 			controller->showToast(u"MediaTok: визуал и 4K ава сохранены!"_q);
 			box->closeBox();
 		});
