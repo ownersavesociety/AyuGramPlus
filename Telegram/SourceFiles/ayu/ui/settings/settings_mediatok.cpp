@@ -3,6 +3,7 @@
 
 #include "ayu/ayu_settings.h"
 #include "ayu/features/mediatok/mediatok_features.h"
+#include "ayu/features/mediatok/mediatok_fonts.h"
 #include "ayu/ui/boxes/edit_mark_box.h"
 #include "ayu/ui/settings/ayu_builder.h"
 #include "ayu/ui/settings/settings_main.h"
@@ -388,15 +389,53 @@ void BuildCleanupSection(SectionBuilder &builder) {
 	builder.addSkip();
 }
 
+void BuildFontsSection(SectionBuilder &builder) {
+	const auto controller = builder.controller();
+
+	builder.addSubsectionTitle(rpl::single(u"Шрифты клиента и текста сообщений"_q));
+
+	builder.addButton({
+		.id = u"mediatok/fontsStudio"_q,
+		.title = rpl::single(u"Студия шрифтов MediaTok (48+ клиента • 32 стиля чата)"_q),
+		.icon = { &st::menuIconFont },
+		.label = rpl::single(MediaTok::ActiveChatTextStyleId().isEmpty()
+			? u"48+ шрифтов"_q
+			: MediaTok::ActiveChatTextStyleName()),
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowFontsStudioBox(controller, 0);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/chatTextFonts"_q,
+		.title = rpl::single(u"Стили текста сообщений (видят все в Telegram)"_q),
+		.icon = { &st::menuIconEdit },
+		.label = rpl::single(MediaTok::ActiveChatTextStyleName()),
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowFontsStudioBox(controller, 1);
+			}
+		},
+	});
+
+	builder.addSkip();
+	builder.addDividerText(rpl::single(
+		u"48 встроенных кириллических шрифтов (Inter, Montserrat, Unbounded, Press Start 2P, Caveat, JetBrains Mono и др.) + импорт любых .ttf/.otf файлов. Также доступно в чате по командам .font и .f <стиль> <текст>."_q));
+	builder.addSkip();
+}
+
 const auto kMeta = BuildHelper({
 	.id = AyuMediaTok::Id(),
 	.parentId = AyuMain::Id(),
-	.title = u"MediaTok (AI, Видео, Войсмод)"_q,
+	.title = u"MediaTok (AI, Шрифты, Видео, Войсмод)"_q,
 	.icon = &st::menuIconPremium,
 }, [](SectionBuilder &builder) {
 	auto ayu = AyuSectionBuilder(builder);
 
 	builder.addSkip();
+	BuildFontsSection(builder);
 	BuildGeminiSection(builder);
 	BuildMediaAndSpeedSection(builder, ayu);
 	BuildVoicemodSection(builder);

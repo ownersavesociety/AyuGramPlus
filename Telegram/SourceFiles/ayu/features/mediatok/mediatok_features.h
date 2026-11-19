@@ -72,7 +72,7 @@ void CheckAutoDeleteOutgoing(not_null<HistoryItem*> item);
 
 [[nodiscard]] bool HandleOutgoingText(
 	not_null<Window::SessionController*> controller,
-	const Api::MessageToSend &message);
+	Api::MessageToSend &message);
 
 [[nodiscard]] bool CanResendAsCircle(HistoryItem *item);
 

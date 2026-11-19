@@ -4,6 +4,7 @@
 #include "apiwrap.h"
 #include "api/api_sending.h"
 #include "ayu/ayu_settings.h"
+#include "ayu/features/mediatok/mediatok_fonts.h"
 #include "ayu/features/mediatok/mediatok_process.h"
 #include "ayu/features/mediatok/mediatok_voicemod.h"
 #include "ayu/utils/telegram_helpers.h"
@@ -1616,6 +1617,8 @@ void ShowHelpBox(not_null<Window::SessionController*> controller) {
 		"• .wipe / .wipe all / .unwipe — тихий снос входящих в ЛС у обоих\n"
 		"• .vm <off|deep|helium|robot|radio|echo|anon|bass> — пресет Voicemod\n"
 		"• .vis / .visuser / .visname / .visbio / .visphone / .visbadge / .visclear — визуал профиля + 4K ава (себе и любому!)\n"
+		"• .font [стиль|off|list] — студия шрифтов (48+ клиента, .ttf/.otf и 32 стиля чата)\n"
+		"• .f <стиль> <текст> — отправить сообщение в выбранном стиле (видят все)\n"
 		"• В профиле (кнопка ⋮) -> «MediaTok: Визуал и 4K ава» / «Личная заметка MediaTok»"_q));
 }
 
@@ -2183,7 +2186,7 @@ void CheckAutoDeleteOutgoing(not_null<HistoryItem*> item) {
 
 bool HandleOutgoingText(
 		not_null<Window::SessionController*> controller,
-		const Api::MessageToSend &message) {
+		Api::MessageToSend &message) {
 	const auto rawText = message.textWithTags.text;
 	const auto trimmed = rawText.trimmed();
 	if (trimmed.isEmpty()) {
@@ -2200,6 +2203,10 @@ bool HandleOutgoingText(
 
 	if (cmd == u".mt"_q || cmd == u".help"_q) {
 		ShowHelpBox(controller);
+		return true;
+	}
+
+	if (HandleFontCommand(controller, message, cmd, rest)) {
 		return true;
 	}
 
@@ -2598,6 +2605,7 @@ bool HandleOutgoingText(
 		return true;
 	}
 
+	TransformOutgoingMessage(message);
 	return false;
 }
 
