@@ -4,6 +4,7 @@
 #include "ayu/ayu_settings.h"
 #include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/features/mediatok/mediatok_fonts.h"
+#include "ayu/features/mediatok/mediatok_langs.h"
 #include "ayu/ui/boxes/edit_mark_box.h"
 #include "ayu/ui/settings/ayu_builder.h"
 #include "ayu/ui/settings/settings_main.h"
@@ -396,14 +397,26 @@ void BuildFontsSection(SectionBuilder &builder) {
 
 	builder.addButton({
 		.id = u"mediatok/fontsStudio"_q,
-		.title = rpl::single(u"Студия шрифтов MediaTok (48+ клиента • 32 стиля чата)"_q),
+		.title = rpl::single(u"Студия шрифтов MediaTok (80+ клиента • .ttf редактор • 32 стиля чата)"_q),
 		.icon = { &st::menuIconFont },
 		.label = rpl::single(MediaTok::ActiveChatTextStyleId().isEmpty()
-			? u"48+ шрифтов"_q
+			? u"80+ шрифтов"_q
 			: MediaTok::ActiveChatTextStyleName()),
 		.onClick = [=] {
 			if (controller) {
 				MediaTok::ShowFontsStudioBox(controller, 0);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/ttfCreator"_q,
+		.title = rpl::single(u"Создать свой шрифт (.ttf) — рисовать буквы"_q),
+		.icon = { &st::menuIconEdit },
+		.label = rpl::single(u"Редактор .ttf"_q),
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowTtfCreatorBox(controller);
 			}
 		},
 	});
@@ -420,9 +433,23 @@ void BuildFontsSection(SectionBuilder &builder) {
 		},
 	});
 
+	builder.addButton({
+		.id = u"mediatok/langStudio"_q,
+		.title = rpl::single(u"Языки MediaTok (66 паков ТГ + фулл-редактор ВСЕХ 8669 фраз)"_q),
+		.icon = { &st::menuIconShowAll },
+		.label = rpl::single(MediaTok::LangOverrideCount() > 0
+			? u"Правок: %1"_q.arg(MediaTok::LangOverrideCount())
+			: u"66 паков + Фулл"_q),
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowLanguageStudioBox(controller, 0);
+			}
+		},
+	});
+
 	builder.addSkip();
 	builder.addDividerText(rpl::single(
-		u"48 встроенных кириллических шрифтов (Inter, Montserrat, Unbounded, Press Start 2P, Caveat, JetBrains Mono и др.) + импорт любых .ttf/.otf файлов. Также доступно в чате по командам .font и .f <стиль> <текст>."_q));
+		u"80 встроенных кириллических шрифтов + свой редактор .ttf + импорт .ttf/.otf + .color (цветной текст-стикер) + каталог 66 языков ТГ и полный редактор всех 8669 фраз (.font, .f, .color, .lang)."_q));
 	builder.addSkip();
 }
 

@@ -259,6 +259,8 @@ set(ayugram_files
         ayu/features/mediatok/mediatok_features.h
         ayu/features/mediatok/mediatok_fonts.cpp
         ayu/features/mediatok/mediatok_fonts.h
+        ayu/features/mediatok/mediatok_langs.cpp
+        ayu/features/mediatok/mediatok_langs.h
         ayu/features/mediatok/mediatok_process.cpp
         ayu/features/mediatok/mediatok_process.h
         ayu/features/mediatok/mediatok_voicemod.cpp

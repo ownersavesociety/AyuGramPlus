@@ -129,7 +129,7 @@ jobs:
                  "/c/Program Files/Microsoft SQL Server" || true
           LIB_UNIX=$(cygpath -u "$LibrariesPath")
           if [ -d "$LIB_UNIX" ]; then
-            find "$LIB_UNIX" -type f \( -name '*.obj' -o -name '*.pch' -o -name '*.idb' \) -delete || true
+            find "$LIB_UNIX" -type f ! -path '*/objects-*' \( -name '*.obj' -o -name '*.pch' -o -name '*.idb' \) -delete || true
             if [ ! -f "$LIB_UNIX/cache_keys/qt_6.11.2" ]; then
               rm -rf "$LIB_UNIX"/[qQ]t* || true
             fi

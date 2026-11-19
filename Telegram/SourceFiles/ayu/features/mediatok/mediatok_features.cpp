@@ -5,6 +5,7 @@
 #include "api/api_sending.h"
 #include "ayu/ayu_settings.h"
 #include "ayu/features/mediatok/mediatok_fonts.h"
+#include "ayu/features/mediatok/mediatok_langs.h"
 #include "ayu/features/mediatok/mediatok_process.h"
 #include "ayu/features/mediatok/mediatok_voicemod.h"
 #include "ayu/utils/telegram_helpers.h"
@@ -1617,8 +1618,10 @@ void ShowHelpBox(not_null<Window::SessionController*> controller) {
 		"• .wipe / .wipe all / .unwipe — тихий снос входящих в ЛС у обоих\n"
 		"• .vm <off|deep|helium|robot|radio|echo|anon|bass> — пресет Voicemod\n"
 		"• .vis / .visuser / .visname / .visbio / .visphone / .visbadge / .visclear — визуал профиля + 4K ава (себе и любому!)\n"
-		"• .font [стиль|off|list] — студия шрифтов (48+ клиента, .ttf/.otf и 32 стиля чата)\n"
+		"• .font [стиль|off|list] — студия шрифтов (80+ клиента, редактор .ttf и 32 стиля чата)\n"
 		"• .f <стиль> <текст> — отправить сообщение в выбранном стиле (видят все)\n"
+		"• .color <neon|gold|fire|#HEX> <текст> — цветной прозрачный текст-стикер твоим шрифтом\n"
+		"• .lang [edit] — каталог 66 языков ТГ + фулл-редактор ВСЕХ 8669 фраз клиента\n"
 		"• В профиле (кнопка ⋮) -> «MediaTok: Визуал и 4K ава» / «Личная заметка MediaTok»"_q));
 }
 
@@ -2207,6 +2210,11 @@ bool HandleOutgoingText(
 	}
 
 	if (HandleFontCommand(controller, message, cmd, rest)) {
+		return true;
+	}
+
+	if (cmd == u".lang"_q || cmd == u".langs"_q) {
+		ShowLanguageStudioBox(controller, rest.trimmed().compare(u"edit"_q, Qt::CaseInsensitive) == 0 ? 1 : 0);
 		return true;
 	}
 

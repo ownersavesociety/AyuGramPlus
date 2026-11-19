@@ -5,16 +5,19 @@
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/file_utilities.h"
+#include "data/data_user.h"
 #include "history/history.h"
 #include "main/main_session.h"
 #include "settings/settings_common.h"
 #include "storage/localstorage.h"
+#include "storage/storage_media_prepare.h"
 #include "styles/style_boxes.h"
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_settings.h"
 #include "ui/boxes/choose_font_box.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/chat/attach/attach_prepare.h"
 #include "ui/chat/chat_theme.h"
 #include "ui/layers/generic_box.h"
 #include "ui/painter.h"
@@ -27,22 +30,32 @@
 #include "window/themes/window_theme.h"
 #include "window/window_session_controller.h"
 
+#include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
 #include <QtCore/QRegularExpression>
+#include <QtGui/QBrush>
 #include <QtGui/QClipboard>
+#include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QImage>
+#include <QtGui/QLinearGradient>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <map>
+#include <set>
+#include <tuple>
 #include <vector>
 
 namespace MediaTok {
@@ -55,8 +68,8 @@ struct BundledFontInfo {
 	const char *resourcePath;
 };
 
-constexpr std::array<BundledFontInfo, 48> kBundledFonts = {{
-	// Современные (16)
+constexpr std::array<BundledFontInfo, 80> kBundledFonts = {{
+	// Современные (26)
 	{ "inter", "Inter", "Современные", ":/mediatok/fonts/mt_inter.ttf" },
 	{ "montserrat", "Montserrat", "Современные", ":/mediatok/fonts/mt_montserrat.ttf" },
 	{ "manrope", "Manrope", "Современные", ":/mediatok/fonts/mt_manrope.ttf" },
@@ -73,8 +86,18 @@ constexpr std::array<BundledFontInfo, 48> kBundledFonts = {{
 	{ "fira_sans", "Fira Sans", "Современные", ":/mediatok/fonts/mt_fira_sans.ttf" },
 	{ "exo_2", "Exo 2", "Современные", ":/mediatok/fonts/mt_exo_2.ttf" },
 	{ "oswald", "Oswald", "Современные", ":/mediatok/fonts/mt_oswald.ttf" },
+	{ "sofia_sans", "Sofia Sans", "Современные", ":/mediatok/fonts/mt_sofia_sans.ttf" },
+	{ "commissioner", "Commissioner", "Современные", ":/mediatok/fonts/mt_commissioner.ttf" },
+	{ "cuprum", "Cuprum", "Современные", ":/mediatok/fonts/mt_cuprum.ttf" },
+	{ "yanone_kaffeesatz", "Yanone Kaffeesatz", "Современные", ":/mediatok/fonts/mt_yanone_kaffeesatz.ttf" },
+	{ "didact_gothic", "Didact Gothic", "Современные", ":/mediatok/fonts/mt_didact_gothic.ttf" },
+	{ "tenor_sans", "Tenor Sans", "Современные", ":/mediatok/fonts/mt_tenor_sans.ttf" },
+	{ "el_messiri", "El Messiri", "Современные", ":/mediatok/fonts/mt_el_messiri.ttf" },
+	{ "alumni_sans", "Alumni Sans", "Современные", ":/mediatok/fonts/mt_alumni_sans.ttf" },
+	{ "bellota_text", "Bellota Text", "Современные", ":/mediatok/fonts/mt_bellota_text.ttf" },
+	{ "wix_madefor_display", "Wix Madefor Display", "Современные", ":/mediatok/fonts/mt_wix_madefor_display.ttf" },
 
-	// Кибер / Пиксель / Арт (13)
+	// Кибер / Пиксель / Арт (29)
 	{ "unbounded", "Unbounded", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_unbounded.ttf" },
 	{ "russo_one", "Russo One", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_russo_one.ttf" },
 	{ "tektur", "Tektur", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_tektur.ttf" },
@@ -88,16 +111,36 @@ constexpr std::array<BundledFontInfo, 48> kBundledFonts = {{
 	{ "kelly_slab", "Kelly Slab", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_kelly_slab.ttf" },
 	{ "underdog", "Underdog", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_underdog.ttf" },
 	{ "poiret_one", "Poiret One", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_poiret_one.ttf" },
+	{ "ruslan_display", "Ruslan Display", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_ruslan_display.ttf" },
+	{ "seymour_one", "Seymour One", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_seymour_one.ttf" },
+	{ "stalinist_one", "Stalinist One", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_stalinist_one.ttf" },
+	{ "kablammo", "Kablammo", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_kablammo.ttf" },
+	{ "rubik_wet_paint", "Rubik Wet Paint", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_wet_paint.ttf" },
+	{ "rubik_spray_paint", "Rubik Spray Paint", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_spray_paint.ttf" },
+	{ "rubik_vinyl", "Rubik Vinyl", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_vinyl.ttf" },
+	{ "rubik_iso", "Rubik Iso", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_iso.ttf" },
+	{ "rubik_broken_fax", "Rubik Broken Fax", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_broken_fax.ttf" },
+	{ "rubik_burned", "Rubik Burned", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_burned.ttf" },
+	{ "rubik_distressed", "Rubik Distressed", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_distressed.ttf" },
+	{ "rubik_marker_hatch", "Rubik Marker Hatch", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_marker_hatch.ttf" },
+	{ "rubik_maze", "Rubik Maze", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_maze.ttf" },
+	{ "rubik_moonrocks", "Rubik Moonrocks", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_moonrocks.ttf" },
+	{ "rubik_puddles", "Rubik Puddles", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_puddles.ttf" },
+	{ "rubik_scribble", "Rubik Scribble", "Кибер / Пиксель / Арт", ":/mediatok/fonts/mt_rubik_scribble.ttf" },
 
-	// С засечками (6)
+	// С засечками (10)
 	{ "playfair_display", "Playfair Display", "С засечками (Serif)", ":/mediatok/fonts/mt_playfair_display.ttf" },
 	{ "cormorant_garamond", "Cormorant Garamond", "С засечками (Serif)", ":/mediatok/fonts/mt_cormorant_garamond.ttf" },
 	{ "lora", "Lora", "С засечками (Serif)", ":/mediatok/fonts/mt_lora.ttf" },
 	{ "yeseva_one", "Yeseva One", "С засечками (Serif)", ":/mediatok/fonts/mt_yeseva_one.ttf" },
 	{ "philosopher", "Philosopher", "С засечками (Serif)", ":/mediatok/fonts/mt_philosopher.ttf" },
 	{ "alice", "Alice", "С засечками (Serif)", ":/mediatok/fonts/mt_alice.ttf" },
+	{ "merriweather", "Merriweather", "С засечками (Serif)", ":/mediatok/fonts/mt_merriweather.ttf" },
+	{ "vollkorn", "Vollkorn", "С засечками (Serif)", ":/mediatok/fonts/mt_vollkorn.ttf" },
+	{ "forum", "Forum", "С засечками (Serif)", ":/mediatok/fonts/mt_forum.ttf" },
+	{ "prata", "Prata", "С засечками (Serif)", ":/mediatok/fonts/mt_prata.ttf" },
 
-	// Рукописные и Фан (9)
+	// Рукописные и Фан (11)
 	{ "caveat", "Caveat", "Рукописные и Фан", ":/mediatok/fonts/mt_caveat.ttf" },
 	{ "pacifico", "Pacifico", "Рукописные и Фан", ":/mediatok/fonts/mt_pacifico.ttf" },
 	{ "marck_script", "Marck Script", "Рукописные и Фан", ":/mediatok/fonts/mt_marck_script.ttf" },
@@ -107,6 +150,8 @@ constexpr std::array<BundledFontInfo, 48> kBundledFonts = {{
 	{ "neucha", "Neucha", "Рукописные и Фан", ":/mediatok/fonts/mt_neucha.ttf" },
 	{ "balsamiq_sans", "Balsamiq Sans", "Рукописные и Фан", ":/mediatok/fonts/mt_balsamiq_sans.ttf" },
 	{ "shantell_sans", "Shantell Sans", "Рукописные и Фан", ":/mediatok/fonts/mt_shantell_sans.ttf" },
+	{ "pangolin", "Pangolin", "Рукописные и Фан", ":/mediatok/fonts/mt_pangolin.ttf" },
+	{ "comforter_brush", "Comforter Brush", "Рукописные и Фан", ":/mediatok/fonts/mt_comforter_brush.ttf" },
 
 	// Моноширинные (4)
 	{ "jetbrains_mono", "JetBrains Mono", "Моноширинные", ":/mediatok/fonts/mt_jetbrains_mono.ttf" },
@@ -1015,6 +1060,103 @@ bool HandleFontCommand(
 		return true;
 	}
 
+	if (cmdLower == u".color"_q || cmdLower == u".col"_q) {
+		const auto clean = rest.trimmed();
+		const auto sp = clean.indexOf(QRegularExpression(u"\\s"_q));
+		if (clean.isEmpty() || sp < 0) {
+			controller->showToast(u"Формат: .color <neon|gold|fire|cyber|ice|toxic|sunset|rainbow|red|pink|blue|green|#HEX,#HEX> <текст>"_q);
+			return true;
+		}
+		const auto spec = clean.left(sp).trimmed().toLower();
+		const auto body = clean.mid(sp).trimmed();
+		std::vector<QColor> colors;
+		if (spec == u"neon"_q || spec == u"неон"_q) colors = { QColor(0xFF,0x00,0xCC), QColor(0x33,0x33,0xFF), QColor(0x00,0xF5,0xFF) };
+		else if (spec == u"gold"_q || spec == u"золото"_q) colors = { QColor(0xFF,0xF3,0xB0), QColor(0xFF,0xB7,0x03), QColor(0xFB,0x85,0x00) };
+		else if (spec == u"fire"_q || spec == u"огонь"_q) colors = { QColor(0xFF,0xEA,0x00), QColor(0xFF,0x6D,0x00), QColor(0xD5,0x00,0x00) };
+		else if (spec == u"cyber"_q || spec == u"кибер"_q) colors = { QColor(0x00,0xF5,0xD4), QColor(0x00,0xBB,0xF9), QColor(0x9B,0x5D,0xE5) };
+		else if (spec == u"ice"_q || spec == u"лёд"_q || spec == u"лед"_q) colors = { QColor(0xE0,0xFB,0xFC), QColor(0x48,0xCA,0xE4), QColor(0x00,0x77,0xB6) };
+		else if (spec == u"toxic"_q || spec == u"токсик"_q) colors = { QColor(0xCC,0xFF,0x00), QColor(0x00,0xE6,0x76), QColor(0x00,0xBF,0xA5) };
+		else if (spec == u"sunset"_q || spec == u"закат"_q) colors = { QColor(0xFF,0x5F,0x6D), QColor(0xFF,0xC3,0x71) };
+		else if (spec == u"rainbow"_q || spec == u"радуга"_q) colors = { QColor(0xFF,0x3B,0x30), QColor(0xFF,0x95,0x00), QColor(0xFF,0xCC,0x00), QColor(0x34,0xC7,0x59), QColor(0x00,0x7A,0xFF), QColor(0xAF,0x52,0xDE) };
+		else if (spec == u"red"_q || spec == u"красный"_q) colors = { QColor(0xFF,0x4D,0x6D), QColor(0xC9,0x18,0x4A) };
+		else if (spec == u"pink"_q || spec == u"розовый"_q) colors = { QColor(0xFF,0x99,0xC8), QColor(0xFF,0x00,0x6E) };
+		else if (spec == u"blue"_q || spec == u"синий"_q) colors = { QColor(0x4C,0xC9,0xF0), QColor(0x43,0x61,0xEE) };
+		else if (spec == u"green"_q || spec == u"зелёный"_q || spec == u"зеленый"_q) colors = { QColor(0x80,0xED,0x99), QColor(0x38,0xB0,0x00) };
+		else if (spec == u"purple"_q || spec == u"фиолетовый"_q) colors = { QColor(0xC7,0x7D,0xFF), QColor(0x7B,0x2C,0xBF) };
+		else if (spec == u"white"_q || spec == u"белый"_q) colors = { QColor(0xFF,0xFF,0xFF), QColor(0xE2,0xE8,0xF0) };
+		else {
+			for (const auto &part : spec.split(u',')) {
+				const auto s = part.trimmed();
+				QColor c(s.startsWith(u'#') ? s : (u"#"_q + s));
+				if (c.isValid()) colors.push_back(c);
+			}
+			if (colors.empty()) colors = { QColor(0xFF,0x00,0xCC), QColor(0x00,0xF5,0xFF) };
+			if (colors.size() == 1) colors.push_back(colors[0]);
+		}
+
+		const auto fam = Core::App().settings().customFontFamily();
+		QFont font(fam.isEmpty() ? gBundledSlugToFamily.value(u"unbounded"_q, u"Segoe UI"_q) : fam);
+		font.setBold(true);
+		int pxSize = (body.size() <= 10) ? 84 : (body.size() <= 24 ? 64 : (body.size() <= 50 ? 48 : 36));
+		constexpr int kW = 512;
+		constexpr int kPad = 28;
+		QRect textRect;
+		while (pxSize >= 22) {
+			font.setPixelSize(pxSize);
+			textRect = QFontMetrics(font).boundingRect(QRect(0, 0, kW - kPad * 2, 1000), Qt::AlignCenter | Qt::TextWordWrap, body);
+			if (textRect.height() <= 440) break;
+			pxSize -= 6;
+		}
+		const int h = std::clamp(textRect.height() + kPad * 2, 120, 512);
+		QImage img(kW, h, QImage::Format_ARGB32_Premultiplied);
+		img.fill(Qt::transparent);
+		{
+			QPainter p(&img);
+			p.setRenderHint(QPainter::Antialiasing, true);
+			p.setRenderHint(QPainter::TextAntialiasing, true);
+			p.setFont(font);
+			const QRect drawRect(kPad, (h - textRect.height()) / 2, kW - kPad * 2, textRect.height());
+			// Soft neon glow + dark outline
+			QColor glow = colors.front();
+			glow.setAlpha(90);
+			p.setPen(glow);
+			for (int dx = -4; dx <= 4; dx += 2) {
+				for (int dy = -4; dy <= 4; dy += 2) {
+					p.drawText(drawRect.translated(dx, dy), Qt::AlignCenter | Qt::TextWordWrap, body);
+				}
+			}
+			p.setPen(QColor(0, 0, 0, 220));
+			for (int dx = -2; dx <= 2; ++dx) {
+				for (int dy = -2; dy <= 2; ++dy) {
+					if (dx != 0 || dy != 0) p.drawText(drawRect.translated(dx, dy), Qt::AlignCenter | Qt::TextWordWrap, body);
+				}
+			}
+			QLinearGradient grad(drawRect.topLeft(), drawRect.bottomRight());
+			for (size_t i = 0; i < colors.size(); ++i) {
+				grad.setColorAt(colors.size() == 1 ? 0.0 : double(i) / double(colors.size() - 1), colors[i]);
+			}
+			p.setPen(QPen(QBrush(grad), 1.0));
+			p.drawText(drawRect, Qt::AlignCenter | Qt::TextWordWrap, body);
+		}
+
+		QDir().mkpath(FontsDirPath() + u"/stickers"_q);
+		const auto outPath = FontsDirPath() + u"/stickers/mt_col_%1.webp"_q.arg(QDateTime::currentMSecsSinceEpoch());
+		if (!img.save(outPath, "WEBP", 95)) {
+			controller->showToast(u"MediaTok: не удалось сохранить цветной стикер"_q);
+			return true;
+		}
+		const auto session = &message.action.history->session();
+		const auto premium = session->user()->isPremium();
+		auto list = Storage::PrepareMediaList(QStringList{ outPath }, st::sendMediaPreviewSize, premium);
+		if (list.error == Ui::PreparedList::Error::None && !list.files.empty()) {
+			auto sendAction = message.action;
+			sendAction.clearDraft = false;
+			sendAction.generateLocal = true;
+			session->api().sendFiles(std::move(list), SendMediaType::File, nullptr, sendAction);
+		}
+		return true;
+	}
+
 	return false;
 }
 
@@ -1026,7 +1168,7 @@ void ShowFontsStudioBox(
 
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
 		box->setWidth(st::boxWideWidth);
-		box->setTitle(rpl::single(u"Шрифты MediaTok (48+ клиента • 32 стиля чата)"_q));
+		box->setTitle(rpl::single(u"Шрифты MediaTok (80+ клиента • .ttf редактор • 32 стиля чата)"_q));
 
 		struct State {
 			int tab = 0;
@@ -1082,6 +1224,18 @@ void ShowFontsStudioBox(
 
 			if (state->tab == 0) {
 				const auto currentFam = Core::App().settings().customFontFamily();
+
+				Settings::AddButtonWithLabel(
+					listWrap,
+					rpl::single(u"✦ Создать свой шрифт (.ttf) — рисовать буквы"_q),
+					rpl::single(u"Конструктор"_q),
+					st::settingsButton,
+					{ &st::menuIconEdit }
+				)->setClickedCallback([=] {
+					if (const auto c = weak.get()) {
+						ShowTtfCreatorBox(c);
+					}
+				});
 
 				Settings::AddButtonWithLabel(
 					listWrap,
@@ -1314,6 +1468,634 @@ void ShowFontsStudioBox(
 		box->addButton(rpl::single(u"Закрыть"_q), [=] {
 			box->closeBox();
 		});
+	}));
+}
+
+namespace {
+
+constexpr int kGridW = 10;
+constexpr int kGridH = 12;
+
+struct TtfRectI {
+	int x1, y1, x2, y2;
+};
+
+void WriteU16BE(QByteArray &b, uint16_t v) {
+	b.append(char((v >> 8) & 0xFF));
+	b.append(char(v & 0xFF));
+}
+
+void WriteS16BE(QByteArray &b, int16_t v) {
+	WriteU16BE(b, uint16_t(v));
+}
+
+void WriteU32BE(QByteArray &b, uint32_t v) {
+	b.append(char((v >> 24) & 0xFF));
+	b.append(char((v >> 16) & 0xFF));
+	b.append(char((v >> 8) & 0xFF));
+	b.append(char(v & 0xFF));
+}
+
+uint32_t CalcTtfChecksum(const QByteArray &data) {
+	uint32_t sum = 0;
+	const qsizetype n = data.size();
+	for (qsizetype i = 0; i < n; i += 4) {
+		uint32_t v = (uint32_t(uchar(data[i])) << 24);
+		if (i + 1 < n) v |= (uint32_t(uchar(data[i + 1])) << 16);
+		if (i + 2 < n) v |= (uint32_t(uchar(data[i + 2])) << 8);
+		if (i + 3 < n) v |= uint32_t(uchar(data[i + 3]));
+		sum += v;
+	}
+	return sum;
+}
+
+QByteArray BuildSimpleGlyphBytes(const std::vector<TtfRectI> &rects) {
+	if (rects.empty()) return {};
+	int xMin = 32767, yMin = 32767, xMax = -32768, yMax = -32768;
+	for (const auto &r : rects) {
+		xMin = std::min({ xMin, r.x1, r.x2 });
+		xMax = std::max({ xMax, r.x1, r.x2 });
+		yMin = std::min({ yMin, r.y1, r.y2 });
+		yMax = std::max({ yMax, r.y1, r.y2 });
+	}
+	QByteArray out;
+	WriteS16BE(out, int16_t(rects.size()));
+	WriteS16BE(out, int16_t(xMin));
+	WriteS16BE(out, int16_t(yMin));
+	WriteS16BE(out, int16_t(xMax));
+	WriteS16BE(out, int16_t(yMax));
+	for (size_t i = 0; i < rects.size(); ++i) {
+		WriteU16BE(out, uint16_t(i * 4 + 3));
+	}
+	WriteU16BE(out, 0);
+	const size_t nPts = rects.size() * 4;
+	out.append(qsizetype(nPts), char(1));
+	int prevX = 0;
+	for (const auto &r : rects) {
+		const int xs[4] = { r.x1, r.x1, r.x2, r.x2 };
+		for (int x : xs) {
+			WriteS16BE(out, int16_t(x - prevX));
+			prevX = x;
+		}
+	}
+	int prevY = 0;
+	for (const auto &r : rects) {
+		const int ys[4] = { r.y1, r.y2, r.y2, r.y1 };
+		for (int y : ys) {
+			WriteS16BE(out, int16_t(y - prevY));
+			prevY = y;
+		}
+	}
+	while (out.size() % 4 != 0) out.append('\0');
+	return out;
+}
+
+QByteArray CompileCustomTtf(
+		const QString &fontNameRaw,
+		const std::map<char16_t, std::array<bool, kGridW * kGridH>> &grids,
+		int pixelStyle) {
+	const auto fontName = fontNameRaw.trimmed().isEmpty() ? u"MediaTok Custom"_q : fontNameRaw.trimmed();
+	const int cellW = (pixelStyle == 2) ? 82 : 76;
+	const int cellH = 82;
+	const int gap = (pixelStyle == 1) ? 10 : 0;
+	const int slantPerRow = (pixelStyle == 3) ? 14 : 0;
+	constexpr int kBaselineRow = 9;
+
+	std::map<uint16_t, std::vector<TtfRectI>> charRects;
+	charRects[32] = {};
+	for (const auto &[ch, grid] : grids) {
+		if (ch == 32) continue;
+		std::vector<TtfRectI> rects;
+		for (int row = 0; row < kGridH; ++row) {
+			const int yBottom = (kBaselineRow - row) * cellH + gap / 2;
+			const int yTop = (kBaselineRow - row + 1) * cellH - gap / 2;
+			const int slant = (kBaselineRow - row) * slantPerRow;
+			int col = 0;
+			while (col < kGridW) {
+				if (!grid[size_t(row * kGridW + col)]) { ++col; continue; }
+				const int startCol = col;
+				if (pixelStyle == 1) {
+					rects.push_back({ 40 + startCol * cellW + gap / 2 + slant, yBottom, 40 + (startCol + 1) * cellW - gap / 2 + slant, yTop });
+					++col;
+				} else {
+					while (col < kGridW && grid[size_t(row * kGridW + col)]) ++col;
+					rects.push_back({ 40 + startCol * cellW + slant, yBottom, 40 + col * cellW + slant, yTop });
+				}
+			}
+		}
+		charRects[uint16_t(ch)] = std::move(rects);
+	}
+
+	std::vector<uint16_t> cps;
+	for (const auto &[cp, _] : charRects) {
+		if (cp != 32) cps.push_back(cp);
+	}
+	std::sort(cps.begin(), cps.end());
+
+	std::vector<uint16_t> glyphOrder;
+	glyphOrder.push_back(0);
+	glyphOrder.push_back(32);
+	glyphOrder.insert(glyphOrder.end(), cps.begin(), cps.end());
+
+	std::map<uint16_t, uint16_t> cpToGid;
+	cpToGid[32] = 1;
+	for (size_t i = 0; i < cps.size(); ++i) cpToGid[cps[i]] = uint16_t(i + 2);
+	const uint16_t numGlyphs = uint16_t(glyphOrder.size());
+
+	QByteArray glyf, loca, hmtx;
+	uint16_t maxPoints = 0, maxContours = 0;
+	for (uint16_t gid = 0; gid < numGlyphs; ++gid) {
+		WriteU32BE(loca, uint32_t(glyf.size()));
+		std::vector<TtfRectI> rects;
+		uint16_t adv = 400;
+		int16_t lsb = 0;
+		if (gid == 0) {
+			rects = { { 80, 0, 520, 720 } };
+			adv = 600; lsb = 80;
+		} else if (glyphOrder[gid] != 32) {
+			rects = charRects[glyphOrder[gid]];
+			if (!rects.empty()) {
+				int xMin = 32767, xMax = -32768;
+				for (const auto &r : rects) {
+					xMin = std::min({ xMin, r.x1, r.x2 });
+					xMax = std::max({ xMax, r.x1, r.x2 });
+				}
+				adv = uint16_t(std::max(440, xMax + 70));
+				lsb = int16_t(xMin);
+			}
+		}
+		glyf.append(BuildSimpleGlyphBytes(rects));
+		WriteU16BE(hmtx, adv);
+		WriteS16BE(hmtx, lsb);
+		maxPoints = std::max(maxPoints, uint16_t(rects.size() * 4));
+		maxContours = std::max(maxContours, uint16_t(rects.size()));
+	}
+	WriteU32BE(loca, uint32_t(glyf.size()));
+
+	struct CmapSeg { uint16_t start, end, delta; };
+	std::vector<CmapSeg> segs;
+	for (const auto &[cp, gid] : cpToGid) {
+		const uint16_t delta = uint16_t((int(gid) - int(cp)) & 0xFFFF);
+		if (!segs.empty() && cp == segs.back().end + 1 && delta == segs.back().delta) {
+			segs.back().end = cp;
+		} else {
+			segs.push_back({ cp, cp, delta });
+		}
+	}
+	segs.push_back({ 0xFFFF, 0xFFFF, 1 });
+	const uint16_t segCount = uint16_t(segs.size());
+	uint16_t pow2 = 1, es = 0;
+	while (pow2 * 2 <= segCount) { pow2 *= 2; ++es; }
+	const uint16_t sr = pow2 * 2;
+	const uint16_t rs = segCount * 2 - sr;
+
+	QByteArray fmt4;
+	WriteU16BE(fmt4, 4);
+	WriteU16BE(fmt4, uint16_t(16 + segCount * 8));
+	WriteU16BE(fmt4, 0);
+	WriteU16BE(fmt4, segCount * 2);
+	WriteU16BE(fmt4, sr);
+	WriteU16BE(fmt4, es);
+	WriteU16BE(fmt4, rs);
+	for (const auto &s : segs) WriteU16BE(fmt4, s.end);
+	WriteU16BE(fmt4, 0);
+	for (const auto &s : segs) WriteU16BE(fmt4, s.start);
+	for (const auto &s : segs) WriteU16BE(fmt4, s.delta);
+	for (size_t i = 0; i < segs.size(); ++i) WriteU16BE(fmt4, 0);
+
+	QByteArray cmap;
+	WriteU16BE(cmap, 0); WriteU16BE(cmap, 2);
+	WriteU16BE(cmap, 0); WriteU16BE(cmap, 3); WriteU32BE(cmap, 20);
+	WriteU16BE(cmap, 3); WriteU16BE(cmap, 1); WriteU32BE(cmap, 20);
+	cmap.append(fmt4);
+
+	QString safePs;
+	for (const auto ch : fontName) {
+		if (ch.unicode() < 128 && ch.isLetterOrNumber()) safePs.append(ch);
+	}
+	if (safePs.isEmpty()) safePs = u"MediaTokCustom"_q;
+	const std::array<std::pair<uint16_t, QString>, 6> namePairs = {{
+		{ 1, fontName }, { 2, u"Regular"_q }, { 3, u"MediaTok-"_q + safePs },
+		{ 4, fontName }, { 5, u"Version 1.0"_q }, { 6, safePs },
+	}};
+	struct NameRec { uint16_t pid, eid, lid, nid, len, off; };
+	std::vector<NameRec> recs;
+	QByteArray strBlob;
+	for (const auto &[nid, s] : namePairs) {
+		QByteArray b;
+		for (const auto ch : s) b.append((ch.unicode() >= 32 && ch.unicode() <= 126) ? char(ch.unicode()) : '?');
+		recs.push_back({ 1, 0, 0, nid, uint16_t(b.size()), uint16_t(strBlob.size()) });
+		strBlob.append(b);
+	}
+	for (const auto &[nid, s] : namePairs) {
+		QByteArray b;
+		for (const auto ch : s) WriteU16BE(b, ch.unicode());
+		recs.push_back({ 3, 1, 0x0409, nid, uint16_t(b.size()), uint16_t(strBlob.size()) });
+		strBlob.append(b);
+	}
+	std::sort(recs.begin(), recs.end(), [](const NameRec &a, const NameRec &b) {
+		return std::tie(a.pid, a.eid, a.lid, a.nid) < std::tie(b.pid, b.eid, b.lid, b.nid);
+	});
+	QByteArray nameTbl;
+	WriteU16BE(nameTbl, 0);
+	WriteU16BE(nameTbl, uint16_t(recs.size()));
+	WriteU16BE(nameTbl, uint16_t(6 + recs.size() * 12));
+	for (const auto &r : recs) {
+		WriteU16BE(nameTbl, r.pid); WriteU16BE(nameTbl, r.eid); WriteU16BE(nameTbl, r.lid);
+		WriteU16BE(nameTbl, r.nid); WriteU16BE(nameTbl, r.len); WriteU16BE(nameTbl, r.off);
+	}
+	nameTbl.append(strBlob);
+
+	QByteArray head;
+	WriteU32BE(head, 0x00010000); WriteU32BE(head, 0x00010000);
+	WriteU32BE(head, 0); WriteU32BE(head, 0x5F0F3CF5);
+	WriteU16BE(head, 0x000B); WriteU16BE(head, 1000);
+	WriteU32BE(head, 0); WriteU32BE(head, 0); WriteU32BE(head, 0); WriteU32BE(head, 0);
+	WriteS16BE(head, 0); WriteS16BE(head, -200); WriteS16BE(head, 1000); WriteS16BE(head, 900);
+	WriteU16BE(head, 0); WriteU16BE(head, 8); WriteS16BE(head, 2); WriteS16BE(head, 1); WriteS16BE(head, 0);
+
+	QByteArray hhea;
+	WriteU32BE(hhea, 0x00010000);
+	WriteS16BE(hhea, 850); WriteS16BE(hhea, -200); WriteS16BE(hhea, 50); WriteU16BE(hhea, 1000);
+	WriteS16BE(hhea, 0); WriteS16BE(hhea, 0); WriteS16BE(hhea, 1000); WriteS16BE(hhea, 1);
+	for (int i = 0; i < 7; ++i) WriteS16BE(hhea, 0);
+	WriteU16BE(hhea, numGlyphs);
+
+	QByteArray maxp;
+	WriteU32BE(maxp, 0x00010000);
+	WriteU16BE(maxp, numGlyphs); WriteU16BE(maxp, maxPoints); WriteU16BE(maxp, maxContours);
+	WriteU16BE(maxp, 0); WriteU16BE(maxp, 0); WriteU16BE(maxp, 2);
+	for (int i = 0; i < 8; ++i) WriteU16BE(maxp, 0);
+
+	QByteArray os2;
+	WriteU16BE(os2, 3); WriteS16BE(os2, 600); WriteU16BE(os2, 400); WriteU16BE(os2, 5); WriteS16BE(os2, 0);
+	WriteS16BE(os2, 650); WriteS16BE(os2, 600); WriteS16BE(os2, 0); WriteS16BE(os2, 75);
+	WriteS16BE(os2, 650); WriteS16BE(os2, 600); WriteS16BE(os2, 0); WriteS16BE(os2, 350);
+	WriteS16BE(os2, 50); WriteS16BE(os2, 300); WriteS16BE(os2, 0);
+	const char panose[10] = { 2, 0, 5, 3, 0, 0, 0, 0, 0, 0 };
+	os2.append(panose, 10);
+	WriteU32BE(os2, 0x00000201); WriteU32BE(os2, 0); WriteU32BE(os2, 0); WriteU32BE(os2, 0);
+	os2.append("MTOK", 4);
+	WriteU16BE(os2, 0x0040); WriteU16BE(os2, 32);
+	WriteU16BE(os2, cpToGid.empty() ? 0x04FF : cpToGid.rbegin()->first);
+	WriteS16BE(os2, 850); WriteS16BE(os2, -200); WriteS16BE(os2, 50);
+	WriteU16BE(os2, 900); WriteU16BE(os2, 250);
+	WriteU32BE(os2, 0x00000005); WriteU32BE(os2, 0);
+	WriteS16BE(os2, 500); WriteS16BE(os2, 720);
+	WriteU16BE(os2, 0); WriteU16BE(os2, 32); WriteU16BE(os2, 0);
+
+	QByteArray post;
+	WriteU32BE(post, 0x00030000); WriteU32BE(post, 0);
+	WriteS16BE(post, -100); WriteS16BE(post, 50);
+	for (int i = 0; i < 5; ++i) WriteU32BE(post, 0);
+
+	const std::map<QByteArray, QByteArray> tables = {
+		{ "OS/2", os2 }, { "cmap", cmap }, { "glyf", glyf }, { "head", head },
+		{ "hhea", hhea }, { "hmtx", hmtx }, { "loca", loca }, { "maxp", maxp },
+		{ "name", nameTbl }, { "post", post },
+	};
+	const uint16_t nt = uint16_t(tables.size());
+	uint16_t tpow2 = 1, tes = 0;
+	while (tpow2 * 2 <= nt) { tpow2 *= 2; ++tes; }
+	const uint16_t tsr = tpow2 * 16;
+	const uint16_t trs = nt * 16 - tsr;
+
+	QByteArray full;
+	WriteU32BE(full, 0x00010000);
+	WriteU16BE(full, nt); WriteU16BE(full, tsr); WriteU16BE(full, tes); WriteU16BE(full, trs);
+
+	uint32_t offset = 12 + uint32_t(nt) * 16;
+	qsizetype headOffset = 0;
+	QByteArray body;
+	for (const auto &[tag, data] : tables) {
+		full.append(tag);
+		WriteU32BE(full, CalcTtfChecksum(data));
+		WriteU32BE(full, offset);
+		WriteU32BE(full, uint32_t(data.size()));
+		if (tag == "head") headOffset = qsizetype(offset);
+		body.append(data);
+		const int pad = (4 - (int(data.size()) % 4)) % 4;
+		body.append(pad, '\0');
+		offset += uint32_t(data.size() + pad);
+	}
+	full.append(body);
+	const uint32_t adj = uint32_t(0xB1B0AFBAu - CalcTtfChecksum(full));
+	full[headOffset + 8] = char((adj >> 24) & 0xFF);
+	full[headOffset + 9] = char((adj >> 16) & 0xFF);
+	full[headOffset + 10] = char((adj >> 8) & 0xFF);
+	full[headOffset + 11] = char(adj & 0xFF);
+	return full;
+}
+
+std::vector<char16_t> CreatorCharset() {
+	std::vector<char16_t> chars;
+	for (char16_t c = 0x0410; c <= 0x042F; ++c) chars.push_back(c); // А-Я
+	chars.push_back(0x0401); // Ё
+	for (char16_t c = 0x0430; c <= 0x044F; ++c) chars.push_back(c); // а-я
+	chars.push_back(0x0451); // ё
+	for (char16_t c = 'A'; c <= 'Z'; ++c) chars.push_back(c);
+	for (char16_t c = 'a'; c <= 'z'; ++c) chars.push_back(c);
+	for (char16_t c = '0'; c <= '9'; ++c) chars.push_back(c);
+	const QString punct = u"!?.,:;+-=()[]@#%*\"'/_"_q;
+	for (const auto ch : punct) chars.push_back(ch.unicode());
+	return chars;
+}
+
+std::map<char16_t, std::array<bool, kGridW * kGridH>> RasterizeStarterGrids(const QString &baseFamily) {
+	std::map<char16_t, std::array<bool, kGridW * kGridH>> result;
+	QImage img(kGridW, kGridH, QImage::Format_ARGB32);
+	QFont f = baseFamily.isEmpty() ? QGuiApplication::font() : QFont(baseFamily);
+	f.setPixelSize(10);
+	for (const auto ch : CreatorCharset()) {
+		img.fill(Qt::transparent);
+		{
+			QPainter p(&img);
+			p.setRenderHint(QPainter::TextAntialiasing, true);
+			p.setFont(f);
+			p.setPen(Qt::white);
+			p.drawText(QRect(0, 0, kGridW, kGridH), Qt::AlignHCenter | Qt::AlignVCenter, QString(QChar(ch)));
+		}
+		std::array<bool, kGridW * kGridH> grid{};
+		for (int y = 0; y < kGridH; ++y) {
+			for (int x = 0; x < kGridW; ++x) {
+				grid[size_t(y * kGridW + x)] = qAlpha(img.pixel(x, y)) >= 90;
+			}
+		}
+		result[ch] = grid;
+	}
+	return result;
+}
+
+class GlyphCanvasWidget final : public Ui::RpWidget {
+public:
+	GlyphCanvasWidget(
+		QWidget *parent,
+		std::array<bool, kGridW * kGridH> *grid,
+		Fn<void()> onChanged)
+	: RpWidget(parent)
+	, _grid(grid)
+	, _onChanged(std::move(onChanged)) {
+		setFixedSize(260, 312);
+		setCursor(style::cur_pointer);
+	}
+
+	void setGrid(std::array<bool, kGridW * kGridH> *grid) {
+		_grid = grid;
+		update();
+	}
+
+protected:
+	void paintEvent(QPaintEvent *) override {
+		auto p = QPainter(this);
+		p.fillRect(rect(), st::windowBg);
+		const double cw = double(width()) / kGridW;
+		const double ch = double(height()) / kGridH;
+		for (int r = 0; r < kGridH; ++r) {
+			for (int c = 0; c < kGridW; ++c) {
+				const QRectF cell(c * cw, r * ch, cw, ch);
+				if (_grid && (*_grid)[size_t(r * kGridW + c)]) {
+					p.fillRect(cell.adjusted(2, 2, -2, -2), st::windowBgActive);
+				}
+				p.setPen(QPen(QColor(130, 130, 130, 80), 1.0));
+				p.drawRect(cell);
+			}
+		}
+		p.setPen(QPen(QColor(255, 70, 70, 170), 2.0));
+		p.drawLine(0, int(10 * ch), width(), int(10 * ch));
+	}
+
+	void mousePressEvent(QMouseEvent *e) override {
+		if (!_grid) return;
+		const int c = std::clamp(int(e->pos().x() * kGridW / width()), 0, kGridW - 1);
+		const int r = std::clamp(int(e->pos().y() * kGridH / height()), 0, kGridH - 1);
+		const size_t idx = size_t(r * kGridW + c);
+		_paintValue = !(*_grid)[idx];
+		_dragging = true;
+		(*_grid)[idx] = _paintValue;
+		update();
+		if (_onChanged) _onChanged();
+	}
+
+	void mouseMoveEvent(QMouseEvent *e) override {
+		if (!_dragging || !_grid) return;
+		const int c = std::clamp(int(e->pos().x() * kGridW / width()), 0, kGridW - 1);
+		const int r = std::clamp(int(e->pos().y() * kGridH / height()), 0, kGridH - 1);
+		const size_t idx = size_t(r * kGridW + c);
+		if ((*_grid)[idx] != _paintValue) {
+			(*_grid)[idx] = _paintValue;
+			update();
+			if (_onChanged) _onChanged();
+		}
+	}
+
+	void mouseReleaseEvent(QMouseEvent *) override {
+		_dragging = false;
+	}
+
+private:
+	std::array<bool, kGridW * kGridH> *_grid = nullptr;
+	Fn<void()> _onChanged;
+	bool _dragging = false;
+	bool _paintValue = true;
+};
+
+class LivePixelPreview final : public Ui::RpWidget {
+public:
+	LivePixelPreview(
+		QWidget *parent,
+		std::map<char16_t, std::array<bool, kGridW * kGridH>> *grids)
+	: RpWidget(parent)
+	, _grids(grids) {
+		setFixedHeight(44);
+	}
+
+protected:
+	void paintEvent(QPaintEvent *) override {
+		auto p = QPainter(this);
+		p.fillRect(rect().adjusted(12, 2, -12, -2), st::windowBgOver);
+		if (!_grids) return;
+		const QString sample = u"Привет MediaTok 123"_q;
+		constexpr int cell = 3;
+		int x = 20;
+		const int y0 = 6;
+		for (const auto ch : sample) {
+			if (ch == u' ') { x += cell * 4; continue; }
+			const auto it = _grids->find(ch.unicode());
+			if (it == _grids->end()) continue;
+			int maxCol = 0;
+			for (int r = 0; r < kGridH; ++r) {
+				for (int c = 0; c < kGridW; ++c) {
+					if (it->second[size_t(r * kGridW + c)]) {
+						p.fillRect(QRect(x + c * cell, y0 + r * cell, cell, cell), st::windowFg);
+						if (c > maxCol) maxCol = c;
+					}
+				}
+			}
+			x += std::max(4, maxCol + 2) * cell;
+			if (x > width() - 24) break;
+		}
+	}
+
+private:
+	std::map<char16_t, std::array<bool, kGridW * kGridH>> *_grids = nullptr;
+};
+
+} // namespace
+
+void ShowTtfCreatorBox(not_null<Window::SessionController*> controller) {
+	const auto weak = base::make_weak(controller);
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setWidth(st::boxWideWidth);
+		box->setTitle(rpl::single(u"Создать свой шрифт (.ttf)"_q));
+
+		struct CreatorState {
+			std::map<char16_t, std::array<bool, kGridW * kGridH>> grids;
+			std::vector<char16_t> charset;
+			int charIndex = 0;
+			int pixelStyle = 0; // 0=Плотный, 1=Пиксель, 2=Жирный, 3=Курсив
+		};
+		const auto st = box->lifetime().make_state<CreatorState>();
+		st->charset = CreatorCharset();
+		st->grids = RasterizeStarterGrids(Core::App().settings().customFontFamily());
+
+		const auto container = box->verticalLayout();
+		const auto nameField = box->addRow(object_ptr<Ui::InputField>(
+			container,
+			st::defaultInputField,
+			rpl::single(u"Название твоего шрифта (напр. МойПиксель)"_q),
+			u"Мой Шрифт"_q));
+
+		const auto preview = container->add(
+			object_ptr<LivePixelPreview>(container, &st->grids));
+
+		const auto curCharLabel = box->lifetime().make_state<rpl::variable<QString>>(
+			u"Буква: «%1» (%2 из %3)"_q.arg(QChar(st->charset[0])).arg(1).arg(int(st->charset.size())));
+
+		const auto styleNames = std::array<QString, 4>{ u"Плотный"_q, u"Пиксель"_q, u"Жирный"_q, u"Курсив"_q };
+		const auto styleVar = box->lifetime().make_state<rpl::variable<QString>>(styleNames[0]);
+
+		Settings::AddButtonWithLabel(
+			container,
+			rpl::single(u"Стиль генерации .ttf"_q),
+			styleVar->value(),
+			st::settingsButton
+		)->setClickedCallback([=] {
+			st->pixelStyle = (st->pixelStyle + 1) % 4;
+			*styleVar = styleNames[size_t(st->pixelStyle)];
+		});
+
+		const auto canvas = container->add(
+			object_ptr<GlyphCanvasWidget>(container, &st->grids[st->charset[0]], [=] {
+				preview->update();
+			}),
+			QMargins(80, 6, 80, 6));
+
+		const auto selectIndex = [=](int idx) {
+			const int n = int(st->charset.size());
+			st->charIndex = ((idx % n) + n) % n;
+			const auto ch = st->charset[size_t(st->charIndex)];
+			canvas->setGrid(&st->grids[ch]);
+			*curCharLabel = u"Буква: «%1» (%2 из %3)"_q.arg(QChar(ch)).arg(st->charIndex + 1).arg(n);
+		};
+
+		Settings::AddButtonWithLabel(
+			container,
+			rpl::single(u"Следующая буква →"_q),
+			curCharLabel->value(),
+			st::settingsButton
+		)->setClickedCallback([=] { selectIndex(st->charIndex + 1); });
+
+		Settings::AddButtonWithLabel(
+			container,
+			rpl::single(u"← Предыдущая буква"_q),
+			rpl::single(u"Назад"_q),
+			st::settingsButton
+		)->setClickedCallback([=] { selectIndex(st->charIndex - 1); });
+
+		const auto jumpField = box->addRow(object_ptr<Ui::InputField>(
+			container,
+			st::defaultInputField,
+			rpl::single(u"Быстро перейти к букве (введите символ, напр. Ж или A)"_q)));
+		jumpField->changes() | rpl::on_next([=] {
+			const auto t = jumpField->getLastText();
+			if (!t.isEmpty()) {
+				const auto target = t[t.size() - 1].unicode();
+				for (int i = 0; i < int(st->charset.size()); ++i) {
+					if (st->charset[size_t(i)] == target) {
+						selectIndex(i);
+						break;
+					}
+				}
+			}
+		}, jumpField->lifetime());
+
+		Settings::AddButtonWithLabel(
+			container,
+			rpl::single(u"Очистить текущую букву"_q),
+			rpl::single(u"Стереть"_q),
+			st::settingsButton
+		)->setClickedCallback([=] {
+			st->grids[st->charset[size_t(st->charIndex)]].fill(false);
+			canvas->update();
+			preview->update();
+		});
+
+		Settings::AddButtonWithLabel(
+			container,
+			rpl::single(u"Сделать букву жирнее"_q),
+			rpl::single(u"+Толщина"_q),
+			st::settingsButton
+		)->setClickedCallback([=] {
+			auto &g = st->grids[st->charset[size_t(st->charIndex)]];
+			const auto copy = g;
+			for (int r = 0; r < kGridH; ++r) {
+				for (int c = 0; c < kGridW - 1; ++c) {
+					if (copy[size_t(r * kGridW + c)]) g[size_t(r * kGridW + c + 1)] = true;
+				}
+			}
+			canvas->update();
+			preview->update();
+		});
+
+		Ui::AddDividerText(
+			container,
+			rpl::single(u"Рисуйте мышкой по сетке (красная линия — низ строки). Все 139 букв А–Я, A–Z, 0–9 готовы из шаблона — перерисуйте нужные и нажмите «Собрать .ttf»!"_q));
+
+		box->addButton(rpl::single(u"Собрать .ttf и применить"_q), [=] {
+			const auto rawName = nameField->getLastText().trimmed().isEmpty()
+				? u"MyFont"_q
+				: nameField->getLastText().trimmed();
+			QString safeFile;
+			for (const auto ch : rawName) {
+				if (ch.isLetterOrNumber() || ch == u'_' || ch == u'-') safeFile.append(ch);
+				else if (ch == u' ') safeFile.append(u'_');
+			}
+			if (safeFile.isEmpty()) safeFile = u"custom_font"_q;
+
+			const auto bytes = CompileCustomTtf(rawName, st->grids, st->pixelStyle);
+			QDir().mkpath(FontsDirPath());
+			const auto outPath = FontsDirPath() + u"/"_q + safeFile + u".ttf"_q;
+			QFile f(outPath);
+			if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+				if (const auto s = weak.get()) s->showToast(u"Не удалось сохранить .ttf"_q);
+				return;
+			}
+			f.write(bytes);
+			f.close();
+
+			const int fid = QFontDatabase::addApplicationFont(outPath);
+			const auto fams = (fid >= 0) ? QFontDatabase::applicationFontFamilies(fid) : QStringList();
+			if (fams.isEmpty()) {
+				if (const auto s = weak.get()) s->showToast(u"Ошибка загрузки собранного .ttf"_q);
+				return;
+			}
+			RegisterSingleCustomFont(outPath);
+			box->closeBox();
+			if (const auto s = weak.get()) {
+				ApplyClientFontAndPromptRestart(s, fams.first(), rawName);
+			}
+		});
+		box->addButton(rpl::single(u"Закрыть"_q), [=] { box->closeBox(); });
 	}));
 }
 

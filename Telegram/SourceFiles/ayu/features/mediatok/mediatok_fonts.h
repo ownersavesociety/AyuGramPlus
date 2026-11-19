@@ -34,4 +34,7 @@ void ShowFontsStudioBox(
 	not_null<Window::SessionController*> controller,
 	int initialTab = 0);
 
+void ShowTtfCreatorBox(
+	not_null<Window::SessionController*> controller);
+
 } // namespace MediaTok
