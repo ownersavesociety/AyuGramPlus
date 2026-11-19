@@ -4,6 +4,7 @@
 #include "core/application.h"
 #include "lang/lang_cloud_manager.h"
 #include "lang/lang_instance.h"
+#include "lang_auto_counts.h"
 #include "settings/settings_common.h"
 #include "styles/style_boxes.h"
 #include "styles/style_layers.h"
@@ -343,10 +344,11 @@ void ApplyCurrentOverridesToLangPack() {
 }
 
 [[nodiscard]] QString CurrentLangValue(const QString &key) {
+	using namespace Lang;
 	const auto keyLatin = key.toLatin1();
-	const auto idx = Lang::GetKeyIndex(QLatin1String(keyLatin.constData(), keyLatin.size()));
-	if (idx != Lang::kKeysCount) {
-		return Lang::GetInstance().getValue(idx);
+	const auto idx = GetKeyIndex(QLatin1String(keyLatin.constData(), keyLatin.size()));
+	if (idx != kKeysCount) {
+		return GetInstance().getValue(idx);
 	}
 	return QString();
 }
