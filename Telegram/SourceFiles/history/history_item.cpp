@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history_item.h"
 
+#include "ayu/features/mediatok/mediatok_features.h"
 #include "api/api_premium.h"
 #include "api/api_sensitive_content.h"
 #include "api/api_transcribes.h"
@@ -4664,6 +4665,7 @@ void HistoryItem::setText(TextWithEntities textWithEntities) {
 	}
 
 	applyLocalPremiumEmoji(text);
+	MediaTok::DecodeIncomingPremiumEmojis(text);
 
 	detectTextLinks(text);
 	setTextValue((_media && _media->consumeMessageText(text))

@@ -130,4 +130,6 @@ void ShowVisualProfileBox(
 	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer);
 
+void DecodeIncomingPremiumEmojis(TextWithEntities &text);
+
 } // namespace MediaTok

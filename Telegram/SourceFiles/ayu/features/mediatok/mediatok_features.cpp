@@ -30,6 +30,7 @@
 #include "data/data_session.h"
 #include "data/data_types.h"
 #include "data/data_user.h"
+#include "data/stickers/data_custom_emoji.h"
 #include "dialogs/dialogs_indexed_list.h"
 #include "dialogs/dialogs_main_list.h"
 #include "dialogs/dialogs_row.h"
@@ -2614,6 +2615,55 @@ bool HandleOutgoingText(
 	}
 
 	TransformOutgoingMessage(message);
+	if (!history->session().premium() && !message.textWithTags.tags.empty()) {
+		constexpr auto kTagLen = 35;
+		const QChar digits[4] = { QChar(0x200B), QChar(0x200C), QChar(0x200D), QChar(0x2060) };
+		struct PendingCustomEmoji {
+			int insertPos = 0;
+			uint64 docId = 0;
+		};
+		std::vector<PendingCustomEmoji> pending;
+		TextWithTags::Tags kept;
+		kept.reserve(message.textWithTags.tags.size());
+		for (const auto &tag : message.textWithTags.tags) {
+			if (Ui::InputField::IsCustomEmojiLink(tag.id)) {
+				const auto data = Ui::InputField::CustomEmojiEntityData(tag.id);
+				const auto docId = Data::ParseCustomEmojiData(data);
+				if (docId != 0
+					&& tag.offset >= 0
+					&& tag.length > 0
+					&& tag.offset + tag.length <= message.textWithTags.text.size()) {
+					pending.push_back({ tag.offset + tag.length, uint64(docId) });
+					continue;
+				}
+			}
+			kept.push_back(tag);
+		}
+		if (!pending.empty()) {
+			std::sort(pending.begin(), pending.end(), [](const PendingCustomEmoji &a, const PendingCustomEmoji &b) {
+				return a.insertPos > b.insertPos;
+			});
+			for (const auto &item : pending) {
+				QString encoded;
+				encoded.reserve(kTagLen);
+				encoded.append(QChar(0x2063));
+				encoded.append(QChar(0x2062));
+				for (int shift = 62; shift >= 0; shift -= 2) {
+					encoded.append(digits[(item.docId >> shift) & 0x3ULL]);
+				}
+				encoded.append(QChar(0x2063));
+				message.textWithTags.text.insert(item.insertPos, encoded);
+				for (auto &t : kept) {
+					if (t.offset >= item.insertPos) {
+						t.offset += kTagLen;
+					} else if (t.offset + t.length > item.insertPos) {
+						t.length += kTagLen;
+					}
+				}
+			}
+			message.textWithTags.tags = std::move(kept);
+		}
+	}
 	return false;
 }
 
@@ -2991,6 +3041,8 @@ void PublishGlobal4kUrls(
 		}
 	});
 }
+
+void NotifyVisualPeerUpdated(not_null<PeerData*> peer);
 
 void PublishGlobalVisualProfile(
 		int64 dialogId,
@@ -3839,6 +3891,105 @@ void ShowVisualProfileBox(
 		});
 		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 	}));
+}
+
+void DecodeIncomingPremiumEmojis(TextWithEntities &text) {
+	constexpr auto kTagLen = 35;
+	static const QString kPrefix = QString(QChar(0x2063)) + QString(QChar(0x2062));
+	if (!text.text.contains(kPrefix)) {
+		return;
+	}
+	auto decodeTagAt = [](const QString &s, int start) -> std::optional<uint64> {
+		if (start < 0 || start + kTagLen > s.size()) {
+			return std::nullopt;
+		}
+		if (s[start] != QChar(0x2063) || s[start + 1] != QChar(0x2062) || s[start + 34] != QChar(0x2063)) {
+			return std::nullopt;
+		}
+		uint64 bits = 0;
+		for (int i = 0; i < 32; ++i) {
+			const auto ch = s[start + 2 + i].unicode();
+			uint64 d = 0;
+			if (ch == 0x200B) d = 0;
+			else if (ch == 0x200C) d = 1;
+			else if (ch == 0x200D) d = 2;
+			else if (ch == 0x2060) d = 3;
+			else return std::nullopt;
+			bits = (bits << 2) | d;
+		}
+		return bits;
+	};
+	auto findPrecedingEmoji = [](const QString &s, int endExclusive) -> std::pair<int, int> {
+		if (endExclusive <= 0 || endExclusive > s.size()) {
+			return { -1, 0 };
+		}
+		int idx = endExclusive - 1;
+		while (idx > 0) {
+			const auto u = s[idx].unicode();
+			if (u == 0xFE0F || u == 0xFE0E || u == 0x200D) {
+				--idx;
+				continue;
+			}
+			if (s[idx].isLowSurrogate() && idx - 1 >= 0 && s[idx - 1].isHighSurrogate()) {
+				const uint32 cp = QChar::surrogateToUcs4(s[idx - 1], s[idx]);
+				if (cp >= 0x1F3FB && cp <= 0x1F3FF) {
+					idx -= 2;
+					continue;
+				}
+				--idx;
+				if (idx > 0 && s[idx - 1].unicode() == 0x200D) {
+					idx -= 2;
+					continue;
+				}
+				break;
+			} else {
+				if (idx > 0 && s[idx - 1].unicode() == 0x200D) {
+					idx -= 2;
+					continue;
+				}
+				break;
+			}
+		}
+		if (idx < 0) idx = 0;
+		return { idx, endExclusive - idx };
+	};
+
+	int searchEnd = int(text.text.size());
+	while (searchEnd >= kTagLen) {
+		const int found = int(text.text.lastIndexOf(kPrefix, searchEnd - kTagLen));
+		if (found < 0) {
+			break;
+		}
+		if (const auto docId = decodeTagAt(text.text, found); docId && *docId != 0) {
+			text.text.remove(found, kTagLen);
+			for (auto &entity : text.entities) {
+				if (entity.offset() >= found + kTagLen) {
+					entity.shiftLeft(kTagLen);
+				} else if (entity.offset() < found && entity.offset() + entity.length() > found) {
+					entity.shrinkFromRight(kTagLen);
+				}
+			}
+			const auto [start, len] = findPrecedingEmoji(text.text, found);
+			if (start >= 0 && len > 0) {
+				const bool exists = std::any_of(
+					text.entities.begin(),
+					text.entities.end(),
+					[&](const EntityInText &e) {
+						return e.type() == EntityType::CustomEmoji
+							&& e.offset() == start
+							&& e.length() == len;
+					});
+				if (!exists) {
+					text.entities.push_back(EntityInText(
+						EntityType::CustomEmoji,
+						start,
+						len,
+						Data::SerializeCustomEmojiId(DocumentId(*docId))));
+				}
+			}
+		}
+		searchEnd = found;
+	}
 }
 
 } // namespace MediaTok
