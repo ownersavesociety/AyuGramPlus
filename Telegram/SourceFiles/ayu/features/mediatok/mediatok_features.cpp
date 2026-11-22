@@ -2992,6 +2992,111 @@ void PublishGlobal4kUrls(
 	});
 }
 
+void PublishGlobalVisualProfile(
+		int64 dialogId,
+		const VisualPeerOverride &ov) {
+	if (!dialogId) {
+		return;
+	}
+	const auto ts = QDateTime::currentSecsSinceEpoch();
+	QJsonObject obj;
+	obj.insert(u"ts"_q, qint64(ts));
+	obj.insert(u"name"_q, ov.name);
+	obj.insert(u"username"_q, ov.username);
+	obj.insert(u"alsoUsernames"_q, ov.alsoUsernames);
+	obj.insert(u"phone"_q, ov.phone);
+	obj.insert(u"bio"_q, ov.bio);
+	obj.insert(u"badgeMode"_q, ov.badgeMode);
+
+	QNetworkRequest req(QUrl(u"https://ntfy.sh/mtprof_v1_%1"_q.arg(dialogId)));
+	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/ProfileSync"_q);
+	QPointer<QNetworkReply> reply = NetworkManager().post(
+		req,
+		QJsonDocument(obj).toJson(QJsonDocument::Compact));
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		if (reply) {
+			reply->deleteLater();
+		}
+	});
+}
+
+void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
+	const auto dialogId = VisualDialogId(peer);
+	if (!dialogId) {
+		return;
+	}
+	static std::map<int64, int64> lastAppliedTs;
+	const auto peerId = peer->id;
+	const auto weakSession = base::make_weak(&peer->session());
+
+	QNetworkRequest req(QUrl(u"https://ntfy.sh/mtprof_v1_%1/json?poll=1&since=all"_q.arg(dialogId)));
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/ProfileSync"_q);
+	QPointer<QNetworkReply> reply = NetworkManager().get(req);
+	auto timer = new QTimer(reply);
+	timer->setSingleShot(true);
+	timer->setInterval(12000);
+	QObject::connect(timer, &QTimer::timeout, reply, [=] {
+		if (reply) {
+			reply->abort();
+		}
+	});
+	timer->start();
+
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		if (!reply) {
+			return;
+		}
+		reply->deleteLater();
+		const auto session = weakSession.get();
+		if (reply->error() != QNetworkReply::NoError || !session) {
+			return;
+		}
+		const auto lines = QString::fromUtf8(reply->readAll()).split('\n', Qt::SkipEmptyParts);
+		QJsonObject latest;
+		int64 latestTs = 0;
+		for (const auto &line : lines) {
+			const auto doc = QJsonDocument::fromJson(line.trimmed().toUtf8());
+			if (!doc.isObject()) {
+				continue;
+			}
+			auto obj = doc.object();
+			if (obj.contains(u"message"_q)) {
+				const auto innerDoc = QJsonDocument::fromJson(obj.value(u"message"_q).toString().toUtf8());
+				if (innerDoc.isObject()) {
+					obj = innerDoc.object();
+				}
+			}
+			const auto ts = int64(obj.value(u"ts"_q).toInteger(0));
+			if (ts > latestTs && (obj.contains(u"badgeMode"_q) || obj.contains(u"name"_q) || obj.contains(u"bio"_q) || obj.contains(u"phone"_q) || obj.contains(u"username"_q) || obj.contains(u"alsoUsernames"_q))) {
+				latestTs = ts;
+				latest = obj;
+			}
+		}
+		if (latestTs <= 0 || latestTs <= lastAppliedTs[dialogId]) {
+			return;
+		}
+		lastAppliedTs[dialogId] = latestTs;
+		auto cur = AyuSettings::getInstance().visualProfile(dialogId).value_or(VisualPeerOverride{});
+		if (latest.contains(u"name"_q)) cur.name = latest.value(u"name"_q).toString().trimmed();
+		if (latest.contains(u"username"_q)) cur.username = NormalizeUsernameToken(latest.value(u"username"_q).toString());
+		if (latest.contains(u"alsoUsernames"_q)) cur.alsoUsernames = latest.value(u"alsoUsernames"_q).toString().trimmed();
+		const auto mainPhone = latest.value(u"phone"_q).toString().trimmed();
+		const auto alsoPhones = latest.value(u"alsoPhones"_q).toString().trimmed();
+		if (!mainPhone.isEmpty() || !alsoPhones.isEmpty()) {
+			cur.phone = (!mainPhone.isEmpty() && !alsoPhones.isEmpty())
+				? (mainPhone + u" • "_q + alsoPhones)
+				: (!mainPhone.isEmpty() ? mainPhone : alsoPhones);
+		}
+		if (latest.contains(u"bio"_q)) cur.bio = latest.value(u"bio"_q).toString().trimmed();
+		if (latest.contains(u"badgeMode"_q)) cur.badgeMode = std::clamp(latest.value(u"badgeMode"_q).toInt(0), 0, 5);
+		AyuSettings::getInstance().setVisualProfile(dialogId, cur);
+		if (const auto loadedPeer = session->data().peerLoaded(peerId)) {
+			NotifyVisualPeerUpdated(loadedPeer);
+		}
+	});
+}
+
 void UploadVisualFilesGlobal(
 		int64 dialogId,
 		const QString &photoPath,
@@ -3414,6 +3519,7 @@ void CheckGlobal4kAvatarForPeer(not_null<PeerData*> peer) {
 		return;
 	}
 	lastCheckMs[dialogId] = nowMs;
+	CheckGlobalVisualProfileForPeer(peer);
 
 	const auto peerId = peer->id;
 	const auto weakSession = base::make_weak(&peer->session());
@@ -3719,6 +3825,7 @@ void ShowVisualProfileBox(
 			updated.avatarPath = avatarState->trimmed();
 
 			AyuSettings::getInstance().setVisualProfile(dialogId, updated);
+			PublishGlobalVisualProfile(dialogId, updated);
 			NotifyVisualPeerUpdated(peer);
 			if (*avatarChangedState && !updated.avatarPath.isEmpty()) {
 				const auto vid = VisualAvatarVideoFilePath(dialogId);
