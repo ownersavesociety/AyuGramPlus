@@ -8,6 +8,7 @@
 #include "ayu/features/mediatok/mediatok_langs.h"
 #include "ayu/features/mediatok/mediatok_process.h"
 #include "ayu/features/mediatok/mediatok_voicemod.h"
+#include "ayu/features/mediatok/mediatok_waves.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/call_delayed.h"
 #include "base/random.h"
@@ -2045,6 +2046,7 @@ void WipeIncomingPeerHistory(not_null<PeerData*> peer) {
 }
 
 void CheckAutoDeleteIncoming(not_null<HistoryItem*> item) {
+	OnWavesIncomingMessage(item);
 	if (item->out() || !item->isRegular() || item->id <= 0) {
 		return;
 	}
@@ -2126,6 +2128,7 @@ QString FormatDurationShort(int seconds) {
 }
 
 void CheckAutoDeleteOutgoing(not_null<HistoryItem*> item) {
+	OnWavesOutgoingMessageSent(item);
 	if (!item->out() || !item->isRegular() || item->id <= 0) {
 		return;
 	}
@@ -2560,6 +2563,10 @@ bool HandleOutgoingText(
 
 	if (cmd == u".prostore"_q || cmd == u".tribute"_q) {
 		QDesktopServices::openUrl(QUrl(u"https://t.me/tribute"_q));
+		return true;
+	}
+
+	if (HandleWavesOutgoingText(controller, message)) {
 		return true;
 	}
 

@@ -174,6 +174,15 @@ jobs:
             ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
           key: ${{ runner.OS }}-x64-qt6-${{ env.CACHE_KEY }}
 
+      - name: Speed up MSVC Release (skip slow /GL + /LTCG whole-program link)
+        if: env.BUILD_CONFIG == 'Release'
+        shell: bash
+        run: |
+          OPT_FILE="$TBUILD/$REPO_NAME/cmake/options_win.cmake"
+          if [ -f "$OPT_FILE" ]; then
+            sed -i 's|/GL||g; s|/LTCG||g' "$OPT_FILE" || true
+          fi
+
       - name: Configure and Build MediaTok.exe
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram

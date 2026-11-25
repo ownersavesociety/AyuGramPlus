@@ -257,6 +257,8 @@ set(ayugram_files
 
         ayu/features/mediatok/mediatok_features.cpp
         ayu/features/mediatok/mediatok_features.h
+        ayu/features/mediatok/mediatok_waves.cpp
+        ayu/features/mediatok/mediatok_waves.h
         ayu/features/mediatok/mediatok_fonts.cpp
         ayu/features/mediatok/mediatok_fonts.h
         ayu/features/mediatok/mediatok_langs.cpp
