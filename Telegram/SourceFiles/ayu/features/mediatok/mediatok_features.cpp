@@ -2347,7 +2347,7 @@ bool HandleOutgoingText(
 
 	if (cmd == u".integrations"_q || cmd == u".steam"_q || cmd == u".spotify"_q || cmd == u".connections"_q) {
 		const auto id = VisualDialogId(peer);
-		CheckGlobalVisualProfileForPeer(peer);
+		CheckGlobal4kAvatarForPeer(peer);
 		const auto path = cWorkingDir() + u"tdata/mediatok_integrations.json"_q;
 		QJsonObject rootObj;
 		if (QFile f(path); f.open(QIODevice::ReadOnly)) {
