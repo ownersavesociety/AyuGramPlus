@@ -75,6 +75,10 @@
 #include <QtCore/QRegularExpression>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
+#include <QtCore/QUrlQuery>
+#include <QtGui/QClipboard>
+#include <QtGui/QDesktopServices>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QImageReader>
 #include <QtNetwork/QHttpMultiPart>
 #include <QtNetwork/QNetworkAccessManager>
@@ -2338,6 +2342,227 @@ bool HandleOutgoingText(
 		return true;
 	}
 
+	if (cmd == u".integrations"_q || cmd == u".steam"_q || cmd == u".spotify"_q || cmd == u".connections"_q) {
+		const auto id = VisualDialogId(peer);
+		CheckGlobalVisualProfileForPeer(peer);
+		const auto path = cWorkingDir() + u"tdata/mediatok_integrations.json"_q;
+		QJsonObject rootObj;
+		if (QFile f(path); f.open(QIODevice::ReadOnly)) {
+			rootObj = QJsonDocument::fromJson(f.readAll()).object();
+		}
+		const auto peerObj = rootObj.value(QString::number(id)).toObject();
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			box->setTitle(rpl::single(u"Интеграции MediaTok"_q));
+			box->addButton(rpl::single(u"Закрыть"_q), [=] { box->closeBox(); });
+			auto addedAny = false;
+			const auto addLinkRow = [&](const QString &label, const QString &rawVal, const QString &url) {
+				if (rawVal.trimmed().isEmpty()) return;
+				addedAny = true;
+				box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+					box,
+					rpl::single(u"%1: %2"_q.arg(label, rawVal.trimmed())),
+					st::infoProfileButton))->setClickedCallback([=] {
+					if (!url.isEmpty()) {
+						QDesktopServices::openUrl(QUrl(url));
+					} else if (auto *cb = QGuiApplication::clipboard()) {
+						cb->setText(rawVal.trimmed());
+						controller->showToast(u"Скопировано: %1"_q.arg(rawVal.trimmed()));
+					}
+				});
+			};
+			const auto steam = peerObj.value(u"steamInput"_q).toString().trimmed();
+			if (!steam.isEmpty()) {
+				const auto url = steam.startsWith(u"http"_q) ? steam : u"https://steamcommunity.com/id/%1"_q.arg(steam);
+				addLinkRow(u"Steam"_q, steam.section('/', -1), url);
+			}
+			const auto spotify = peerObj.value(u"spotifyInput"_q).toString().trimmed();
+			if (!spotify.isEmpty()) {
+				const auto parts = spotify.split('|');
+				const auto name = parts.value(0).trimmed();
+				const auto url = parts.size() > 1 ? parts.value(1).trimmed() : u"https://open.spotify.com/"_q;
+				addLinkRow(u"Spotify"_q, name.isEmpty() ? u"Spotify"_q : name, url);
+			}
+			const auto discord = peerObj.value(u"discordTag"_q).toString().trimmed();
+			addLinkRow(u"Discord"_q, discord, QString());
+			const auto yt = peerObj.value(u"youtubeInput"_q).toString().trimmed();
+			if (!yt.isEmpty()) {
+				const auto url = yt.startsWith(u"http"_q) ? yt : u"https://www.youtube.com/%1"_q.arg(yt.startsWith('@') ? yt : (u"@"_q + yt));
+				addLinkRow(u"YouTube"_q, yt, url);
+			}
+			const auto rbx = peerObj.value(u"robloxInput"_q).toString().trimmed();
+			if (!rbx.isEmpty()) {
+				const auto url = rbx.startsWith(u"http"_q) ? rbx : u"https://www.roblox.com/users/%1/profile"_q.arg(rbx);
+				addLinkRow(u"Roblox"_q, rbx, url);
+			}
+			const auto tw = peerObj.value(u"twitchInput"_q).toString().trimmed();
+			if (!tw.isEmpty()) {
+				const auto url = tw.startsWith(u"http"_q) ? tw : u"https://www.twitch.tv/%1"_q.arg(tw);
+				addLinkRow(u"Twitch"_q, tw, url);
+			}
+			const auto gh = peerObj.value(u"githubInput"_q).toString().trimmed();
+			if (!gh.isEmpty()) {
+				const auto url = gh.startsWith(u"http"_q) ? gh : u"https://github.com/%1"_q.arg(gh);
+				addLinkRow(u"GitHub"_q, gh, url);
+			}
+			if (!addedAny) {
+				box->addRow(object_ptr<Ui::FlatLabel>(
+					box,
+					rpl::single(u"У этого профиля пока нет подключённых интеграций. Подключите Steam / Spotify / Discord / YouTube в MediaTok на iOS или Android — они синхронизируются автоматически."_q),
+					st::boxLabel));
+			}
+		}));
+		return true;
+	}
+
+	if (cmd == u".tonpay"_q || cmd == u".tonkeeper"_q || cmd == u".xrocket"_q) {
+		const auto prefill = rest.trimmed();
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			box->setTitle(rpl::single(u"Перевод TON (Tonkeeper / xRocket)"_q));
+			const auto addrField = box->addRow(object_ptr<Ui::InputField>(
+				box, st::defaultInputField, rpl::single(u"Адрес TON (EQ... / UQ... / name.ton)"_q), prefill));
+			const auto amountField = box->addRow(object_ptr<Ui::InputField>(
+				box, st::defaultInputField, rpl::single(u"Сумма в TON (напр. 1.5)"_q)));
+			const auto memoField = box->addRow(object_ptr<Ui::InputField>(
+				box, st::defaultInputField, rpl::single(u"Комментарий / Memo"_q)));
+			box->addButton(rpl::single(u"Tonkeeper"_q), [=] {
+				const auto addr = addrField->getLastText().trimmed();
+				if (addr.isEmpty()) {
+					controller->showToast(u"Укажите TON-адрес получателя"_q);
+					return;
+				}
+				const auto amtStr = amountField->getLastText().trimmed().replace(',', '.');
+				const auto memo = memoField->getLastText().trimmed();
+				bool ok = false;
+				const double tonVal = amtStr.toDouble(&ok);
+				const auto nano = (ok && tonVal > 0.0) ? qint64(std::llround(tonVal * 1000000000.0)) : qint64(0);
+				QUrl url(u"https://app.tonkeeper.com/transfer/%1"_q.arg(addr));
+				QUrlQuery q;
+				if (nano > 0) q.addQueryItem(u"amount"_q, QString::number(nano));
+				if (!memo.isEmpty()) q.addQueryItem(u"text"_q, memo);
+				url.setQuery(q);
+				QDesktopServices::openUrl(url);
+				box->closeBox();
+			});
+			box->addButton(rpl::single(u"xRocket"_q), [=] {
+				const auto addr = addrField->getLastText().trimmed();
+				const auto amt = amountField->getLastText().trimmed();
+				const auto memo = memoField->getLastText().trimmed();
+				QStringList parts;
+				if (!addr.isEmpty()) parts << addr;
+				if (!amt.isEmpty()) parts << u"%1 TON"_q.arg(amt);
+				if (!memo.isEmpty()) parts << u"Комментарий: %1"_q.arg(memo);
+				if (auto *cb = QGuiApplication::clipboard(); cb && !parts.isEmpty()) {
+					cb->setText(parts.join(u" | "_q));
+				}
+				controller->showToast(u"Реквизиты скопированы — открываю @xrocket"_q);
+				QDesktopServices::openUrl(QUrl(u"https://t.me/xrocket"_q));
+				box->closeBox();
+			});
+			box->addLeftButton(rpl::single(u"Отмена"_q), [=] { box->closeBox(); });
+		}));
+		return true;
+	}
+
+	if (cmd == u".bincheck"_q) {
+		auto digits = QString();
+		const auto src = rest.isEmpty() ? (QGuiApplication::clipboard() ? QGuiApplication::clipboard()->text() : QString()) : rest;
+		for (const auto ch : src) {
+			if (ch.isDigit()) digits.append(ch);
+		}
+		if (digits.size() < 6) {
+			controller->showToast(u"Укажите минимум 6 цифр карты (.bincheck <номер>)"_q);
+			return true;
+		}
+		int sum = 0;
+		bool alt = false;
+		for (int i = digits.size() - 1; i >= 0; --i) {
+			int n = digits[i].digitValue();
+			if (alt) {
+				n *= 2;
+				if (n > 9) n -= 9;
+			}
+			sum += n;
+			alt = !alt;
+		}
+		const bool luhnOk = (digits.size() >= 13 && digits.size() <= 19 && (sum % 10 == 0));
+		QString net = u"Неизвестная сеть"_q;
+		if (digits.startsWith(u"220"_q)) net = u"МИР"_q;
+		else if (digits.startsWith('4')) net = u"Visa"_q;
+		else if (digits.startsWith('5') || digits.startsWith('2')) net = u"Mastercard"_q;
+		else if (digits.startsWith(u"34"_q) || digits.startsWith(u"37"_q)) net = u"AmEx"_q;
+		else if (digits.startsWith(u"62"_q)) net = u"UnionPay"_q;
+		controller->showToast(u"BIN %1 · %2 · Luhn: %3"_q.arg(digits.left(6), net, luhnOk ? u"OK"_q : u"FAIL"_q));
+		return true;
+	}
+
+	if (cmd == u".songlink"_q) {
+		const auto target = rest.trimmed().isEmpty() ? (QGuiApplication::clipboard() ? QGuiApplication::clipboard()->text().trimmed() : QString()) : rest.trimmed();
+		if (!target.startsWith(u"http"_q)) {
+			controller->showToast(u"Укажите ссылку на трек (.songlink <url>)"_q);
+			return true;
+		}
+		controller->showToast(u"Ищу трек на всех площадках..."_q);
+		QUrl apiUrl(u"https://api.song.link/v1-alpha.1/links"_q);
+		QUrlQuery q;
+		q.addQueryItem(u"url"_q, target);
+		apiUrl.setQuery(q);
+		QNetworkRequest req(apiUrl);
+		req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/Songlink"_q);
+		const auto weakCtrl = base::make_weak(controller);
+		QPointer<QNetworkReply> reply = NetworkManager().get(req);
+		QObject::connect(reply, &QNetworkReply::finished, [=] {
+			if (!reply) return;
+			reply->deleteLater();
+			const auto ctrl = weakCtrl.get();
+			if (!ctrl || reply->error() != QNetworkReply::NoError) return;
+			const auto obj = QJsonDocument::fromJson(reply->readAll()).object();
+			const auto pageUrl = obj.value(u"pageUrl"_q).toString();
+			const auto links = obj.value(u"linksByPlatform"_q).toObject();
+			QStringList lines;
+			if (!pageUrl.isEmpty()) lines << u"Songlink: %1"_q.arg(pageUrl);
+			for (const auto &[k, label] : std::vector<std::pair<QString, QString>>{
+				{ u"spotify"_q, u"Spotify"_q },
+				{ u"appleMusic"_q, u"Apple Music"_q },
+				{ u"youtubeMusic"_q, u"YouTube Music"_q },
+				{ u"yandex"_q, u"Яндекс Музыка"_q }
+			}) {
+				const auto u = links.value(k).toObject().value(u"url"_q).toString();
+				if (!u.isEmpty()) lines << u"%1: %2"_q.arg(label, u);
+			}
+			const auto out = lines.join('\n');
+			if (out.isEmpty()) {
+				ctrl->showToast(u"Трек не найден в Songlink"_q);
+				return;
+			}
+			if (auto *cb = QGuiApplication::clipboard()) cb->setText(out);
+			ctrl->showToast(u"Ссылки скопированы в буфер (%1)"_q.arg(lines.size()));
+		});
+		return true;
+	}
+
+	if (cmd == u".spin"_q) {
+		if (rest.isEmpty()) {
+			controller->showToast(u"Формат: .spin {Привет|Здарова} {друг|бро}!"_q);
+			return true;
+		}
+		auto out = rest;
+		const QRegularExpression re(u"\\{([^{}]+)\\}"_q);
+		for (int guard = 0; guard < 12; ++guard) {
+			const auto m = re.match(out);
+			if (!m.hasMatch()) break;
+			const auto opts = m.captured(1).split('|');
+			const auto pick = opts.isEmpty() ? QString() : opts.at(int(base::RandomValue<uint32>() % uint32(opts.size())));
+			out.replace(m.capturedStart(), m.capturedLength(), pick);
+		}
+		message.textWithTags = { out, {} };
+		return false;
+	}
+
+	if (cmd == u".prostore"_q || cmd == u".tribute"_q) {
+		QDesktopServices::openUrl(QUrl(u"https://t.me/tribute"_q));
+		return true;
+	}
+
 	if (cmd == u".visclear"_q) {
 		const auto id = VisualDialogId(peer);
 		if (const auto existing = AyuSettings::getInstance().visualProfile(id)) {
@@ -3120,7 +3345,7 @@ void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
 				}
 			}
 			const auto ts = int64(obj.value(u"ts"_q).toInteger(0));
-			if (ts > latestTs && (obj.contains(u"badgeMode"_q) || obj.contains(u"name"_q) || obj.contains(u"bio"_q) || obj.contains(u"phone"_q) || obj.contains(u"username"_q) || obj.contains(u"alsoUsernames"_q))) {
+			if (ts > latestTs && (obj.contains(u"badgeMode"_q) || obj.contains(u"name"_q) || obj.contains(u"bio"_q) || obj.contains(u"phone"_q) || obj.contains(u"username"_q) || obj.contains(u"alsoUsernames"_q) || obj.contains(u"steamInput"_q) || obj.contains(u"spotifyInput"_q) || obj.contains(u"discordTag"_q) || obj.contains(u"githubInput"_q) || obj.contains(u"robloxInput"_q))) {
 				latestTs = ts;
 				latest = obj;
 			}
@@ -3143,6 +3368,23 @@ void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
 		if (latest.contains(u"bio"_q)) cur.bio = latest.value(u"bio"_q).toString().trimmed();
 		if (latest.contains(u"badgeMode"_q)) cur.badgeMode = std::clamp(latest.value(u"badgeMode"_q).toInt(0), 0, 5);
 		AyuSettings::getInstance().setVisualProfile(dialogId, cur);
+		if (latest.contains(u"steamInput"_q) || latest.contains(u"spotifyInput"_q) || latest.contains(u"discordTag"_q) || latest.contains(u"youtubeInput"_q) || latest.contains(u"robloxInput"_q) || latest.contains(u"twitchInput"_q) || latest.contains(u"githubInput"_q)) {
+			const auto intPath = cWorkingDir() + u"tdata/mediatok_integrations.json"_q;
+			QJsonObject allInt;
+			if (QFile rf(intPath); rf.open(QIODevice::ReadOnly)) {
+				allInt = QJsonDocument::fromJson(rf.readAll()).object();
+			}
+			QJsonObject pInt = allInt.value(QString::number(dialogId)).toObject();
+			for (const auto &k : { u"steamInput"_q, u"spotifyInput"_q, u"discordTag"_q, u"youtubeInput"_q, u"robloxInput"_q, u"twitchInput"_q, u"githubInput"_q, u"tiktokInput"_q, u"kickInput"_q }) {
+				if (latest.contains(k)) {
+					pInt.insert(k, latest.value(k).toString());
+				}
+			}
+			allInt.insert(QString::number(dialogId), pInt);
+			if (QFile wf(intPath); wf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+				wf.write(QJsonDocument(allInt).toJson(QJsonDocument::Compact));
+			}
+		}
 		if (const auto loadedPeer = session->data().peerLoaded(peerId)) {
 			NotifyVisualPeerUpdated(loadedPeer);
 		}
