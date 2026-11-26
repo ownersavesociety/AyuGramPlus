@@ -651,7 +651,338 @@ void ShowMusicHubBox(not_null<Window::SessionController*> controller) {
 	}));
 }
 
+// MARK: - Online Cloud Real-ESRGAN Upscaler (.upscale / .4k) + iLoveIMG / Bigjpg (Zero Offline Waifu2x)
+
+QString ExtractGradioImageUrl(const QString &sseText, const QString &baseUrl) {
+	const auto lines = sseText.split('\n');
+	for (int i = lines.size() - 1; i >= 0; --i) {
+		const auto trimmed = lines[i].trimmed();
+		if (!trimmed.startsWith(u"data:"_q)) {
+			continue;
+		}
+		const auto jsonPart = trimmed.mid(5).trimmed().toUtf8();
+		const auto doc = QJsonDocument::fromJson(jsonPart);
+		if (!doc.isArray()) {
+			continue;
+		}
+		const auto arr = doc.array();
+		for (const auto &item : arr) {
+			if (item.isObject()) {
+				const auto obj = item.toObject();
+				const auto url = obj.value(u"url"_q).toString();
+				if (url.startsWith(u"http"_q)) {
+					return url;
+				}
+				const auto path = obj.value(u"path"_q).toString();
+				if (!path.isEmpty()) {
+					if (path.startsWith(u"http"_q)) {
+						return path;
+					}
+					return baseUrl + u"/gradio_api/file="_q + path;
+				}
+			} else if (item.isString() && item.toString().startsWith(u"http"_q)) {
+				return item.toString();
+			}
+		}
+	}
+	return {};
+}
+
+void RunOnlineRealEsrganMirror(
+		base::weak_ptr<Window::SessionController> weakCtrl,
+		QByteArray jpegBytes,
+		bool isAnime,
+		int factor,
+		int mirrorIndex) {
+	const auto ctrl = weakCtrl.get();
+	if (!ctrl) {
+		return;
+	}
+	struct MirrorDef {
+		QString name;
+		QString baseUrl;
+		QString uploadPath;
+		QString callPath;
+	};
+	const std::vector<MirrorDef> mirrors = {
+		{
+			u"Real-ESRGAN Cloud #1"_q,
+			u"https://guetlzy-real-esrgan-demo.hf.space"_q,
+			u"/gradio_api/upload"_q,
+			u"/gradio_api/call/enhance"_q,
+		},
+		{
+			u"Real-ESRGAN Cloud #2"_q,
+			u"https://nick088-real-esrgan-pytorch.hf.space"_q,
+			u"/upload"_q,
+			u"/call/predict"_q,
+		},
+	};
+	if (mirrorIndex >= int(mirrors.size())) {
+		ctrl->showToast(u"Облачные серверы Real-ESRGAN заняты — воспользуйтесь iLoveIMG или Bigjpg в окне .upscale"_q);
+		return;
+	}
+	const auto mirror = mirrors[mirrorIndex];
+	ctrl->showToast(u"AI-апскейл (%1): загрузка фото на сервер..."_q.arg(mirror.name));
+
+	const auto boundary = QByteArray("----MediaTokWinUpscaleBoundary9241");
+	QByteArray body;
+	body.append("--" + boundary + "\r\n");
+	body.append("Content-Disposition: form-data; name=\"files\"; filename=\"input.jpg\"\r\n");
+	body.append("Content-Type: image/jpeg\r\n\r\n");
+	body.append(jpegBytes);
+	body.append("\r\n--" + boundary + "--\r\n");
+
+	QNetworkRequest upReq(QUrl(mirror.baseUrl + mirror.uploadPath));
+	upReq.setHeader(QNetworkRequest::ContentTypeHeader, QString::fromLatin1("multipart/form-data; boundary=" + boundary));
+	upReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/1.0"_q);
+
+	QPointer<QNetworkReply> upReply = WavesNet().post(upReq, body);
+	QObject::connect(upReply, &QNetworkReply::finished, [=] {
+		if (!upReply) return;
+		const auto err = upReply->error();
+		const auto raw = upReply->readAll();
+		upReply->deleteLater();
+		if (err != QNetworkReply::NoError) {
+			RunOnlineRealEsrganMirror(weakCtrl, jpegBytes, isAnime, factor, mirrorIndex + 1);
+			return;
+		}
+		const auto arr = QJsonDocument::fromJson(raw).array();
+		if (arr.isEmpty() || !arr.first().isString()) {
+			RunOnlineRealEsrganMirror(weakCtrl, jpegBytes, isAnime, factor, mirrorIndex + 1);
+			return;
+		}
+		const auto serverPath = arr.first().toString();
+		QJsonObject fileObj;
+		fileObj.insert(u"path"_q, serverPath);
+		QJsonObject metaObj;
+		metaObj.insert(u"_type"_q, u"gradio.FileData"_q);
+		fileObj.insert(u"meta"_q, metaObj);
+
+		QJsonArray dataArr;
+		dataArr.append(fileObj);
+		if (mirrorIndex == 0) {
+			dataArr.append(isAnime ? u"RealESRGAN_x4plus_anime_6B"_q : u"RealESRGAN_x4plus"_q);
+			dataArr.append(factor);
+			dataArr.append(!isAnime);
+		} else {
+			dataArr.append(QString::number(factor));
+		}
+		QJsonObject payload;
+		payload.insert(u"data"_q, dataArr);
+
+		QNetworkRequest callReq(QUrl(mirror.baseUrl + mirror.callPath));
+		callReq.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
+		callReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/1.0"_q);
+
+		QPointer<QNetworkReply> callReply = WavesNet().post(callReq, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+		QObject::connect(callReply, &QNetworkReply::finished, [=] {
+			if (!callReply) return;
+			const auto cErr = callReply->error();
+			const auto cRaw = callReply->readAll();
+			callReply->deleteLater();
+			const auto eventId = QJsonDocument::fromJson(cRaw).object().value(u"event_id"_q).toString();
+			if (cErr != QNetworkReply::NoError || eventId.isEmpty()) {
+				RunOnlineRealEsrganMirror(weakCtrl, jpegBytes, isAnime, factor, mirrorIndex + 1);
+				return;
+			}
+			if (const auto s = weakCtrl.get()) {
+				s->showToast(u"Нейросеть %1 обрабатывает %2x..."_q.arg(mirror.name).arg(factor));
+			}
+			QNetworkRequest pollReq(QUrl(mirror.baseUrl + mirror.callPath + u"/"_q + eventId));
+			pollReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/1.0"_q);
+			QPointer<QNetworkReply> pollReply = WavesNet().get(pollReq);
+			QObject::connect(pollReply, &QNetworkReply::finished, [=] {
+				if (!pollReply) return;
+				const auto pErr = pollReply->error();
+				const auto sseText = QString::fromUtf8(pollReply->readAll());
+				pollReply->deleteLater();
+				const auto resultUrl = ExtractGradioImageUrl(sseText, mirror.baseUrl);
+				if (pErr != QNetworkReply::NoError || resultUrl.isEmpty()) {
+					RunOnlineRealEsrganMirror(weakCtrl, jpegBytes, isAnime, factor, mirrorIndex + 1);
+					return;
+				}
+				QNetworkRequest dlReq(QUrl(resultUrl));
+				dlReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/1.0"_q);
+				QPointer<QNetworkReply> dlReply = WavesNet().get(dlReq);
+				QObject::connect(dlReply, &QNetworkReply::finished, [=] {
+					if (!dlReply) return;
+					const auto dErr = dlReply->error();
+					const auto imgBytes = dlReply->readAll();
+					dlReply->deleteLater();
+					QImage resultImg;
+					if (dErr != QNetworkReply::NoError || !resultImg.loadFromData(imgBytes)) {
+						RunOnlineRealEsrganMirror(weakCtrl, jpegBytes, isAnime, factor, mirrorIndex + 1);
+						return;
+					}
+					const auto outDir = cWorkingDir() + u"tdata/MediaTok_Upscaled/"_q;
+					QDir().mkpath(outDir);
+					const auto outPath = outDir + u"MediaTok_HD_%1x%2_%3.png"_q
+						.arg(resultImg.width())
+						.arg(resultImg.height())
+						.arg(QDateTime::currentSecsSinceEpoch());
+					resultImg.save(outPath, "PNG");
+					QDesktopServices::openUrl(QUrl::fromLocalFile(outPath));
+					if (const auto s = weakCtrl.get()) {
+						s->showToast(u"Готово (%1x%2 PNG сохранено и открыто)"_q
+							.arg(resultImg.width())
+							.arg(resultImg.height()));
+					}
+				});
+			});
+		});
+	});
+}
+
+void PickAndUpscaleOnline(not_null<Window::SessionController*> controller, bool isAnime, int factor) {
+	const auto weakCtrl = base::make_weak(controller);
+	FileDialog::GetOpenPath(
+		nullptr,
+		u"Выберите фото для облачного AI-апскейла Real-ESRGAN"_q,
+		FileDialog::ImagesFilter(),
+		[=](FileDialog::OpenResult &&res) {
+			const auto ctrl = weakCtrl.get();
+			if (!ctrl || res.paths.isEmpty()) {
+				return;
+			}
+			QImage img(res.paths.front());
+			if (img.isNull()) {
+				ctrl->showToast(u"Не удалось открыть изображение"_q);
+				return;
+			}
+			if (std::max(img.width(), img.height()) > 1280) {
+				img = img.scaled(1280, 1280, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+			}
+			QByteArray jpegBytes;
+			QBuffer buf(&jpegBytes);
+			buf.open(QIODevice::WriteOnly);
+			img.save(&buf, "JPEG", 92);
+			RunOnlineRealEsrganMirror(weakCtrl, jpegBytes, isAnime, factor, 0);
+		});
+}
+
+// MARK: - Background AFK Auto-Responder (.afk)
+
+std::map<int64, qint64> &LastAfkReplyAt() {
+	static std::map<int64, qint64> map;
+	return map;
+}
+
+QString DefaultAfkText() {
+	return u"[Автоответчик MediaTok]: Сейчас не у компьютера, отвечу как освобожусь."_q;
+}
+
 } // namespace
+
+void ShowOnlineUpscalerBox(not_null<Window::SessionController*> controller) {
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(u"Онлайн AI-апскейл фото (.upscale)"_q));
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box,
+			rpl::single(u"Бесплатный облачный Real-ESRGAN (без API-ключа) или быстрый переход в iLoveIMG / Bigjpg."_q),
+			st::boxLabel));
+		const auto addBtn = [&](const QString &title, Fn<void()> fn) {
+			box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+				box, rpl::single(title), st::infoProfileButton))->setClickedCallback([=] {
+				box->closeBox();
+				fn();
+			});
+		};
+		addBtn(u"Выбрать фото — Real-ESRGAN 2x HD (Фото)"_q, [=] { PickAndUpscaleOnline(controller, false, 2); });
+		addBtn(u"Выбрать фото — Real-ESRGAN 4x Ultra (Фото)"_q, [=] { PickAndUpscaleOnline(controller, false, 4); });
+		addBtn(u"Выбрать фото — Real-ESRGAN 4x (Аниме / Арт)"_q, [=] { PickAndUpscaleOnline(controller, true, 4); });
+		addBtn(u"Открыть iLoveIMG Upscale (в браузере)"_q, [=] {
+			QDesktopServices::openUrl(QUrl(u"https://www.iloveimg.com/upscale-image"_q));
+		});
+		addBtn(u"Открыть Bigjpg (аниме/фото, в браузере)"_q, [=] {
+			QDesktopServices::openUrl(QUrl(u"https://bigjpg.com"_q));
+		});
+		box->addButton(rpl::single(u"Закрыть"_q), [=] { box->closeBox(); });
+	}));
+}
+
+void ShowAfkConfigBox(not_null<Window::SessionController*> controller) {
+	const auto cfg = LoadWavesConfig();
+	const bool isOn = cfg.value(u"afkEnabled"_q).toBool(false);
+	const auto savedText = cfg.value(u"afkText"_q).toString();
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(u"AFK-автоответчик (.afk)"_q));
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box,
+			rpl::single(u"Статус: %1. Когда включён, автоматически отвечает на входящие сообщения в личке (даже при закрытом чате, 1 раз в 30 мин на собеседника)."_q.arg(isOn ? u"ВКЛ"_q : u"ВЫКЛ"_q)),
+			st::boxLabel));
+		const auto field = box->addRow(object_ptr<Ui::InputField>(
+			box,
+			st::defaultInputField,
+			rpl::single(u"Текст автоответа"_q),
+			savedText.isEmpty() ? DefaultAfkText() : savedText));
+		box->addButton(rpl::single(isOn ? u"Сохранить (оставить ВКЛ)"_q : u"Включить AFK"_q), [=] {
+			auto cur = LoadWavesConfig();
+			const auto txt = field->getLastText().trimmed();
+			cur.insert(u"afkEnabled"_q, true);
+			cur.insert(u"afkText"_q, txt.isEmpty() ? DefaultAfkText() : txt);
+			SaveWavesConfig(cur);
+			controller->showToast(u"AFK-автоответчик включён"_q);
+			box->closeBox();
+		});
+		if (isOn) {
+			box->addLeftButton(rpl::single(u"Выключить"_q), [=] {
+				auto cur = LoadWavesConfig();
+				cur.insert(u"afkEnabled"_q, false);
+				SaveWavesConfig(cur);
+				controller->showToast(u"AFK-автоответчик выключен"_q);
+				box->closeBox();
+			});
+		} else {
+			box->addLeftButton(rpl::single(u"Отмена"_q), [=] { box->closeBox(); });
+		}
+	}));
+}
+
+void ShowCommandPaletteBox(not_null<Window::SessionController*> controller, PeerData *peer) {
+	const auto targetPeer = peer
+		? not_null<PeerData*>(peer)
+		: not_null<PeerData*>(controller->session().user());
+	const auto selfDid = VisualDialogId(controller->session().user());
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(u"Команды MediaTok (.cmd)"_q));
+		const auto addCategory = [&](const QString &header) {
+			box->addRow(object_ptr<Ui::FlatLabel>(
+				box,
+				rpl::single(header),
+				st::boxDividerLabel));
+		};
+		const auto addAction = [&](const QString &title, Fn<void()> fn) {
+			box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+				box, rpl::single(title), st::infoProfileButton))->setClickedCallback([=] {
+				box->closeBox();
+				fn();
+			});
+		};
+
+		addCategory(u"МЕДИА И ОНЛАЙН-АПСКЕЙЛ"_q);
+		addAction(u"Онлайн AI-апскейлер фото (Real-ESRGAN / iLoveIMG / Bigjpg)"_q, [=] { ShowOnlineUpscalerBox(controller); });
+		addAction(u"Offline Music Hub (.music)"_q, [=] { ShowMusicHubBox(controller); });
+		addAction(u"Проверка чеков ELA (.ela)"_q, [=] { RunElaImageCheck(controller); });
+
+		addCategory(u"ПРИВАТНОСТЬ И БЕЗОПАСНОСТЬ"_q);
+		addAction(u"AFK-автоответчик в личке (.afk)"_q, [=] { ShowAfkConfigBox(controller); });
+		addAction(u"OTC-проверка @username в Био (.otccheck)"_q, [=] { RunOtcScamCheck(controller, targetPeer); });
+		addAction(u"Anti-Debug & Integrity Shield (.antidebug)"_q, [=] { ShowAntiDebugReport(controller); });
+		addAction(u"Удалить все мои сообщения везде (.nukeall)"_q, [=] { DeleteMyMessagesEverywhere(controller); });
+
+		addCategory(u"ПРОФИЛЬ, СЕТЬ И КРИПТО"_q);
+		addAction(u"Визуал профиля и 4K ава (.vis)"_q, [=] { ShowVisualProfileBox(controller, targetPeer); });
+		addAction(u"Войти в Steam (Steam OpenID 2.0)"_q, [=] { LaunchSteamOpenIdLogin(controller, selfDid); });
+		addAction(u"Курс TON (USD / RUB)"_q, [=] { FetchTonRate(controller); });
+
+		addCategory(u"АВТОМАТИЗАЦИЯ И СПРАВКА"_q);
+		addAction(u"Макросы текста (.macros)"_q, [=] { ShowMacrosBox(controller); });
+		addAction(u"Полный список текстовых команд (.mt)"_q, [=] { ShowHelpBox(controller); });
+
+		box->addButton(rpl::single(u"Закрыть"_q), [=] { box->closeBox(); });
+	}));
+}
 
 void ApplyRemoteIntegrationsJson(int64 dialogId, const QJsonObject &obj) {
 	if (!dialogId) return;
@@ -673,10 +1004,13 @@ void ApplyRemoteIntegrationsJson(int64 dialogId, const QJsonObject &obj) {
 	}
 }
 
-void ShowWavesHubBox(not_null<Window::SessionController*> controller, not_null<PeerData*> peer) {
-	const auto selfDid = VisualDialogId(peer->session().user());
+void ShowWavesHubBox(not_null<Window::SessionController*> controller, PeerData *peer) {
+	const auto targetPeer = peer
+		? not_null<PeerData*>(peer)
+		: not_null<PeerData*>(controller->session().user());
+	const auto selfDid = VisualDialogId(controller->session().user());
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-		box->setTitle(rpl::single(u"MediaTok Windows — Waves 19–25"_q));
+		box->setTitle(rpl::single(u"MediaTok Windows — Инструменты"_q));
 		const auto addCmdBtn = [&](const QString &title, Fn<void()> fn) {
 			box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
 				box, rpl::single(title), st::infoProfileButton))->setClickedCallback([=] {
@@ -684,17 +1018,20 @@ void ShowWavesHubBox(not_null<Window::SessionController*> controller, not_null<P
 				fn();
 			});
 		};
+		addCmdBtn(u"Палитра команд по категориям (.cmd)"_q, [=] { ShowCommandPaletteBox(controller, targetPeer); });
+		addCmdBtn(u"Онлайн AI-апскейл фото (Real-ESRGAN / iLoveIMG)"_q, [=] { ShowOnlineUpscalerBox(controller); });
+		addCmdBtn(u"AFK-автоответчик в ЛС (.afk)"_q, [=] { ShowAfkConfigBox(controller); });
 		addCmdBtn(u"Войти в Steam (Steam OpenID 2.0)"_q, [=] { LaunchSteamOpenIdLogin(controller, selfDid); });
 		addCmdBtn(u"Курс TON (USD / RUB)"_q, [=] { FetchTonRate(controller); });
 		addCmdBtn(u"Макросы текста (.macros)"_q, [=] { ShowMacrosBox(controller); });
 		addCmdBtn(u"Offline Music Hub (.music)"_q, [=] { ShowMusicHubBox(controller); });
 		addCmdBtn(u"Проверка чеков ELA (.ela)"_q, [=] { RunElaImageCheck(controller); });
-		addCmdBtn(u"OTC проверка @username в Био (.otccheck)"_q, [=] { RunOtcScamCheck(controller, peer); });
+		addCmdBtn(u"OTC проверка @username в Био (.otccheck)"_q, [=] { RunOtcScamCheck(controller, targetPeer); });
 		addCmdBtn(u"Anti-Debug & Integrity Shield (.antidebug)"_q, [=] { ShowAntiDebugReport(controller); });
 		addCmdBtn(u"Экстренный снос аккаунта (.nukeall)"_q, [=] { DeleteMyMessagesEverywhere(controller); });
 		box->addRow(object_ptr<Ui::FlatLabel>(
 			box,
-			rpl::single(u"Команды в чате:\n.steamlogin · .integrations · .tonpay · .ton · .walletlink · .breach · .novoice · .freezechat · .macros · .ghost1m · .mirror · .captcha · .clantag · .music · .purgeme · .dork · .ela · .bincheck · .songlink · .snipeuser · .firstcom · .promosnipe · .otccheck · .spin · .antidebug · .nukeall · .tribute"_q),
+			rpl::single(u"Команды в чате:\n.cmd · .upscale · .afk · .steamlogin · .integrations · .tonpay · .ton · .walletlink · .breach · .novoice · .freezechat · .macros · .ghost1m · .mirror · .captcha · .clantag · .music · .purgeme · .dork · .ela · .bincheck · .songlink · .snipeuser · .firstcom · .promosnipe · .otccheck · .spin · .antidebug · .nukeall · .tribute"_q),
 			st::boxLabel));
 		box->addButton(rpl::single(u"Закрыть"_q), [=] { box->closeBox(); });
 	}));
@@ -719,6 +1056,35 @@ bool HandleWavesOutgoingText(
 
 	if (cmd == u".waves"_q || cmd == u".mt2"_q) {
 		ShowWavesHubBox(controller, peer);
+		return true;
+	}
+	if (cmd == u".cmd"_q || cmd == u".palette"_q) {
+		ShowCommandPaletteBox(controller, peer);
+		return true;
+	}
+	if (cmd == u".upscale"_q || cmd == u".4k"_q) {
+		ShowOnlineUpscalerBox(controller);
+		return true;
+	}
+	if (cmd == u".afk"_q) {
+		const auto lowRest = rest.toLower();
+		if (lowRest == u"off"_q) {
+			auto cur = LoadWavesConfig();
+			cur.insert(u"afkEnabled"_q, false);
+			SaveWavesConfig(cur);
+			controller->showToast(u"AFK-автоответчик выключен"_q);
+		} else if (lowRest == u"on"_q || lowRest.startsWith(u"on "_q)) {
+			auto cur = LoadWavesConfig();
+			cur.insert(u"afkEnabled"_q, true);
+			const auto custom = rest.mid(2).trimmed();
+			if (!custom.isEmpty()) {
+				cur.insert(u"afkText"_q, custom);
+			}
+			SaveWavesConfig(cur);
+			controller->showToast(u"AFK-автоответчик включён"_q);
+		} else {
+			ShowAfkConfigBox(controller);
+		}
 		return true;
 	}
 	if (cmd == u".steamlogin"_q) {
@@ -1034,6 +1400,26 @@ void OnWavesIncomingMessage(not_null<HistoryItem*> item) {
 	if (peer->isUser() && !peer->isSelf() && ContainsDialogInArray(cfg.value(u"mirrorPeers"_q).toArray(), dialogId)) {
 		if (!text.isEmpty() && !text.startsWith(u"[MediaTok "_q) && text.size() <= 120) {
 			SendQuickText(history, text, true);
+		}
+	}
+
+	// 6. Background AFK Auto-Responder in private chats (works even when chat is closed; 30-min cooldown per peer)
+	if (cfg.value(u"afkEnabled"_q).toBool(false) && peer->isUser() && !peer->isSelf()) {
+		if (const auto u = peer->asUser(); u && !u->isBot() && !u->isSupport() && dialogId != 777000) {
+			const auto nowSec = QDateTime::currentSecsSinceEpoch();
+			const auto msgAge = nowSec - qint64(item->date());
+			if (msgAge >= -15 && msgAge <= 45) {
+				auto &lastMap = LastAfkReplyAt();
+				const auto prev = lastMap.count(dialogId) ? lastMap[dialogId] : 0;
+				if ((nowSec - prev) > 1800) {
+					if (lastMap.size() > 512) {
+						lastMap.clear();
+					}
+					lastMap[dialogId] = nowSec;
+					const auto afkMsg = cfg.value(u"afkText"_q).toString();
+					SendQuickText(history, afkMsg.isEmpty() ? DefaultAfkText() : afkMsg, true);
+				}
+			}
 		}
 	}
 }

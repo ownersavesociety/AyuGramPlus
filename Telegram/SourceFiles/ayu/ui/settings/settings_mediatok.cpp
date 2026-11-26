@@ -5,6 +5,7 @@
 #include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/features/mediatok/mediatok_fonts.h"
 #include "ayu/features/mediatok/mediatok_langs.h"
+#include "ayu/features/mediatok/mediatok_waves.h"
 #include "ayu/ui/boxes/edit_mark_box.h"
 #include "ayu/ui/settings/ayu_builder.h"
 #include "ayu/ui/settings/settings_main.h"
@@ -369,6 +370,50 @@ void BuildCleanupSection(SectionBuilder &builder) {
 			notesRefresh->fire({});
 			if (controller) {
 				controller->showToast(u"MediaTok: личные заметки очищены"_q);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/commandPalette"_q,
+		.title = rpl::single(u"Палитра команд по категориям (.cmd)"_q),
+		.icon = { &st::menuIconShowAll },
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowCommandPaletteBox(controller);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/onlineUpscaler"_q,
+		.title = rpl::single(u"Онлайн AI-апскейл фото (Real-ESRGAN / iLoveIMG / Bigjpg)"_q),
+		.icon = { &st::menuIconPhoto },
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowOnlineUpscalerBox(controller);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/afkResponder"_q,
+		.title = rpl::single(u"AFK-автоответчик в ЛС (.afk)"_q),
+		.icon = { &st::menuIconTimer },
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowAfkConfigBox(controller);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/wavesHub"_q,
+		.title = rpl::single(u"Инструменты Waves 19–25 (.waves)"_q),
+		.icon = { &st::menuIconBot },
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowWavesHubBox(controller);
 			}
 		},
 	});

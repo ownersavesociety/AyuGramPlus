@@ -10,6 +10,7 @@
 #include "lang_auto.h"
 #include "ayu/ayu_settings.h"
 #include "ayu/features/mediatok/mediatok_features.h"
+#include "ayu/features/mediatok/mediatok_waves.h"
 #include "ayu/ui/ayu_logo.h"
 #include "ayu/ui/settings/settings_appearance.h"
 #include "ayu/ui/settings/settings_ayu.h"
@@ -108,7 +109,7 @@ void BuildCategories(SectionBuilder &builder) {
 		.icon = { &st::menuIconPremium },
 	});
 	builder.addSectionButton({
-		.title = rpl::single(QString("MediaTok")),
+		.title = rpl::single(u"Режим призрака и скрытность"_q),
 		.targetSection = AyuGhost::Id(),
 		.icon = { &st::menuIconGroupReactions },
 	});
@@ -150,12 +151,12 @@ void BuildLinks(SectionBuilder &builder) {
 
 	builder.addButton({
 		.id = u"mediatok/help"_q,
-		.title = rpl::single(u"Справка по командам (.mt)"_q),
+		.title = rpl::single(u"Палитра команд MediaTok (.cmd)"_q),
 		.icon = { &st::menuIconInfo },
 		.label = rpl::single(u"Открыть"_q),
 		.onClick = [=] {
 			if (controller) {
-				MediaTok::ShowHelpBox(controller);
+				MediaTok::ShowCommandPaletteBox(controller);
 			}
 		},
 	});

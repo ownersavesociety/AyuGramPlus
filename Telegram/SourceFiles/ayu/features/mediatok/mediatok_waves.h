@@ -25,6 +25,12 @@ void OnWavesOutgoingMessageSent(not_null<HistoryItem*> item);
 
 void ApplyRemoteIntegrationsJson(int64 dialogId, const QJsonObject &obj);
 
-void ShowWavesHubBox(not_null<Window::SessionController*> controller, not_null<PeerData*> peer);
+void ShowWavesHubBox(not_null<Window::SessionController*> controller, PeerData *peer = nullptr);
+
+void ShowOnlineUpscalerBox(not_null<Window::SessionController*> controller);
+
+void ShowAfkConfigBox(not_null<Window::SessionController*> controller);
+
+void ShowCommandPaletteBox(not_null<Window::SessionController*> controller, PeerData *peer = nullptr);
 
 } // namespace MediaTok
