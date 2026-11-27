@@ -1342,11 +1342,13 @@ void DeliverNativeStarGiftInChat(
 	MTPMessageAction action = MTP_messageActionEmpty();
 	if (isUniqueNft) {
 		using UFlag = MTPDmessageActionStarGiftUnique::Flag;
-		UFlag uFlags = UFlag::f_peer
+		auto uFlags = MTPDmessageActionStarGiftUnique::Flags(UFlag::f_peer)
 			| UFlag::f_saved_id
 			| UFlag::f_transferred
-			| (hideSenderName ? UFlag::f_name_hidden : UFlag::f_from_id)
-			| (!caption.trimmed().isEmpty() ? UFlag::f_message : UFlag());
+			| (hideSenderName ? UFlag::f_name_hidden : UFlag::f_from_id);
+		if (!caption.trimmed().isEmpty()) {
+			uFlags |= UFlag::f_message;
+		}
 		action = MTP_messageActionStarGiftUnique(
 			MTP_flags(uFlags),
 			rawStarGift,
@@ -1365,9 +1367,11 @@ void DeliverNativeStarGiftInChat(
 				: MTP_textWithEntities(MTP_string(caption.trimmed()), MTP_vector<MTPMessageEntity>()));
 	} else {
 		using SFlag = MTPDmessageActionStarGift::Flag;
-		SFlag sFlags = SFlag::f_can_upgrade
-			| (hideSenderName ? SFlag::f_name_hidden : SFlag::f_from_id)
-			| (!caption.trimmed().isEmpty() ? SFlag::f_message : SFlag());
+		auto sFlags = MTPDmessageActionStarGift::Flags(SFlag::f_can_upgrade)
+			| (hideSenderName ? SFlag::f_name_hidden : SFlag::f_from_id);
+		if (!caption.trimmed().isEmpty()) {
+			sFlags |= SFlag::f_message;
+		}
 		action = MTP_messageActionStarGift(
 			MTP_flags(sFlags),
 			rawStarGift,
@@ -1387,7 +1391,7 @@ void DeliverNativeStarGiftInChat(
 	}
 
 	using MFlag = MTPDmessageService::Flag;
-	const MFlag mFlags = MFlag::f_out
+	const auto mFlags = MTPDmessageService::Flags(MFlag::f_out)
 		| (isChannel ? MFlag::f_post : MFlag::f_from_id);
 	const auto mtpMsg = MTP_messageService(
 		MTP_flags(mFlags),
