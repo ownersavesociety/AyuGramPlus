@@ -87,6 +87,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
 #include "ayu/features/mediatok/mediatok_features.h"
+#include "ayu/features/mediatok/mediatok_waves.h"
 #include "settings/sections/settings_advanced.h"
 #include "settings/sections/settings_premium.h"
 #include "settings/settings_common.h"
@@ -1929,6 +1930,12 @@ void Filler::fillContextMenuActions() {
 		_addAction(u"MediaTok: Визуал и 4K ава"_q, [=] {
 			MediaTok::ShowVisualProfileBox(controller, peer);
 		}, &st::menuIconEdit);
+		_addAction(u"MediaTok: Нативный подарок / NFT в чат"_q, [=] {
+			MediaTok::ShowVisualGiftSenderBox(controller, peer);
+		}, &st::menuIconGiftPremium);
+		_addAction(peer->isSelf() ? u"MediaTok: Мои интеграции"_q : u"MediaTok: Интеграции профиля"_q, [=] {
+			MediaTok::ShowIntegrationsManagerBox(controller, peer);
+		}, &st::menuIconLink);
 	}
 	addDeleteChat();
 	addLeaveChat();
@@ -1964,6 +1971,12 @@ void Filler::fillHistoryActions() {
 		_addAction(u"MediaTok: Визуал и 4K ава"_q, [=] {
 			MediaTok::ShowVisualProfileBox(controller, peer);
 		}, &st::menuIconEdit);
+		_addAction(u"MediaTok: Нативный подарок / NFT в чат"_q, [=] {
+			MediaTok::ShowVisualGiftSenderBox(controller, peer);
+		}, &st::menuIconGiftPremium);
+		_addAction(peer->isSelf() ? u"MediaTok: Мои интеграции"_q : u"MediaTok: Интеграции профиля"_q, [=] {
+			MediaTok::ShowIntegrationsManagerBox(controller, peer);
+		}, &st::menuIconLink);
 	}
 	addDeleteChat();
 	addLeaveChat();
@@ -1993,6 +2006,12 @@ void Filler::fillProfileActions() {
 		_addAction(u"MediaTok: Визуал и 4K ава"_q, [=] {
 			MediaTok::ShowVisualProfileBox(controller, peer);
 		}, &st::menuIconEdit);
+		_addAction(u"MediaTok: Нативный подарок / NFT в чат"_q, [=] {
+			MediaTok::ShowVisualGiftSenderBox(controller, peer);
+		}, &st::menuIconGiftPremium);
+		_addAction(peer->isSelf() ? u"MediaTok: Мои интеграции"_q : u"MediaTok: Интеграции профиля"_q, [=] {
+			MediaTok::ShowIntegrationsManagerBox(controller, peer);
+		}, &st::menuIconLink);
 	}
 	addViewDiscussion();
 	addDirectMessages();

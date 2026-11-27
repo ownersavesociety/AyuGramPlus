@@ -3,10 +3,12 @@
 
 #include "apiwrap.h"
 #include "api/api_sending.h"
+#include "ayu/ayu_settings.h"
 #include "ayu/features/mediatok/mediatok_features.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/call_delayed.h"
 #include "base/random.h"
+#include "base/unixtime.h"
 #include "core/application.h"
 #include "core/file_utilities.h"
 #include "data/data_channel.h"
@@ -26,6 +28,7 @@
 #include "ui/layers/generic_box.h"
 #include "ui/vertical_list.h"
 #include "ui/widgets/buttons.h"
+#include "ui/widgets/checkbox.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
 #include "ui/wrap/vertical_layout.h"
@@ -213,6 +216,30 @@ void PublishIntegrationToCloud(int64 dialogId, const QJsonObject &peerInt) {
 		return;
 	}
 	QJsonObject payload = peerInt;
+	if (const auto ov = AyuSettings::getInstance().visualProfilePtr(dialogId)) {
+		if (!ov->name.isEmpty()) {
+			payload.insert(u"name"_q, ov->name);
+			payload.insert(u"visualName"_q, ov->name);
+		}
+		if (!ov->username.isEmpty()) {
+			payload.insert(u"username"_q, ov->username);
+			payload.insert(u"visualUsername"_q, ov->username);
+		}
+		if (!ov->alsoUsernames.isEmpty()) {
+			payload.insert(u"alsoUsernames"_q, ov->alsoUsernames);
+			payload.insert(u"visualAlsoUsernames"_q, ov->alsoUsernames);
+		}
+		if (!ov->phone.isEmpty()) {
+			payload.insert(u"phone"_q, ov->phone);
+			payload.insert(u"visualPhone"_q, ov->phone);
+		}
+		if (!ov->bio.isEmpty()) {
+			payload.insert(u"bio"_q, ov->bio);
+			payload.insert(u"visualBio"_q, ov->bio);
+		}
+		payload.insert(u"badgeMode"_q, ov->badgeMode);
+		payload.insert(u"visualBadgeMode"_q, ov->badgeMode);
+	}
 	payload.insert(u"ts"_q, qint64(QDateTime::currentSecsSinceEpoch()));
 	QNetworkRequest req(QUrl(u"https://ntfy.sh/mtprof_v1_%1"_q.arg(dialogId)));
 	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
@@ -983,6 +1010,546 @@ void ShowAfkConfigBox(not_null<Window::SessionController*> controller) {
 	}));
 }
 
+void ShowIntegrationsManagerBox(not_null<Window::SessionController*> controller, PeerData *peer) {
+	const auto targetPeer = peer
+		? not_null<PeerData*>(peer)
+		: not_null<PeerData*>(controller->session().user());
+	const auto targetDid = VisualDialogId(targetPeer);
+	const auto selfDid = VisualDialogId(controller->session().user());
+	const bool isOwn = (targetDid == selfDid);
+	CheckGlobal4kAvatarForPeer(targetPeer);
+
+	const auto sanitizeIntegrationUrl = [](const QString &raw, const QStringList &allowedDomains) -> QString {
+		const QUrl parsed(raw.trimmed());
+		if (!parsed.isValid()
+			|| parsed.scheme().compare(u"https"_q, Qt::CaseInsensitive) != 0
+			|| !parsed.userInfo().isEmpty()
+			|| parsed.port() != -1) {
+			return {};
+		}
+		const auto host = parsed.host().toLower();
+		for (const auto &dom : allowedDomains) {
+			if (host == dom || host.endsWith(u"."_q + dom)) {
+				return parsed.toString();
+			}
+		}
+		return {};
+	};
+
+	struct PlatformDef {
+		QString key;
+		QString title;
+		QString loginUrl;
+		QString placeholder;
+		QStringList domains;
+	};
+	const std::vector<PlatformDef> platforms = {
+		{ u"steamInput"_q, u"Steam"_q, u"https://steamcommunity.com/openid/login"_q, u"SteamID64 или https://steamcommunity.com/id/..."_q, { u"steamcommunity.com"_q } },
+		{ u"spotifyInput"_q, u"Spotify"_q, u"https://accounts.spotify.com/login?continue=https%3A%2F%2Fwww.spotify.com%2Faccount%2Foverview%2F"_q, u"Никнейм или https://open.spotify.com/user/..."_q, { u"spotify.com"_q } },
+		{ u"discordTag"_q, u"Discord"_q, u"https://discord.com/login?redirect_to=%2Fchannels%2F%40me"_q, u"Ваш Discord username (например @mediatok)"_q, {} },
+		{ u"youtubeInput"_q, u"YouTube"_q, u"https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2Faccount"_q, u"@канал или https://www.youtube.com/@..."_q, { u"youtube.com"_q, u"youtu.be"_q } },
+		{ u"githubInput"_q, u"GitHub"_q, u"https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile"_q, u"Логин GitHub или https://github.com/..."_q, { u"github.com"_q } },
+		{ u"robloxInput"_q, u"Roblox"_q, u"https://www.roblox.com/login"_q, u"ID / ник или https://www.roblox.com/users/.../profile"_q, { u"roblox.com"_q } },
+		{ u"twitchInput"_q, u"Twitch"_q, u"https://www.twitch.tv/login"_q, u"Канал или https://www.twitch.tv/..."_q, { u"twitch.tv"_q } },
+		{ u"tiktokInput"_q, u"TikTok"_q, u"https://www.tiktok.com/login"_q, u"@аккаунт или https://www.tiktok.com/@..."_q, { u"tiktok.com"_q } },
+		{ u"kickInput"_q, u"Kick"_q, u"https://kick.com"_q, u"Канал или https://kick.com/..."_q, { u"kick.com"_q } },
+	};
+
+	const auto normalizePlatformInput = [](const QString &key, const QString &raw) -> QString {
+		auto v = raw.trimmed();
+		if (v.isEmpty()) {
+			return {};
+		}
+		if (key == u"spotifyInput"_q) {
+			if (v.contains('|')) {
+				return v.left(140);
+			}
+			if (v.startsWith(u"https://"_q, Qt::CaseInsensitive) && v.contains(u"spotify.com"_q, Qt::CaseInsensitive)) {
+				const QUrl u(v);
+				auto seg = u.path().split('/', Qt::SkipEmptyParts).value(1).trimmed();
+				if (seg.isEmpty()) seg = u"Spotify"_q;
+				return u"%1|%2"_q.arg(seg, u.toString(QUrl::RemoveQuery)).left(140);
+			}
+			return u"%1|https://open.spotify.com/user/%2"_q.arg(
+				v.left(64),
+				QString::fromLatin1(QUrl::toPercentEncoding(v.left(64))));
+		}
+		if (key == u"discordTag"_q) {
+			if (v.startsWith('@')) v = v.mid(1).trimmed();
+			return v.left(64);
+		}
+		if (key == u"githubInput"_q || key == u"twitchInput"_q || key == u"kickInput"_q) {
+			if (v.startsWith(u"https://"_q, Qt::CaseInsensitive)) {
+				const auto last = QUrl(v).path().split('/', Qt::SkipEmptyParts).value(0).trimmed();
+				if (!last.isEmpty() && last != u"settings"_q) {
+					return last.left(80);
+				}
+			}
+			if (v.startsWith('@')) v = v.mid(1).trimmed();
+			return v.left(80);
+		}
+		return v.left(120);
+	};
+
+	const auto resolveDisplayAndUrl = [&](const PlatformDef &p, const QString &stored) -> std::pair<QString, QString> {
+		const auto val = stored.trimmed();
+		if (val.isEmpty()) {
+			return {};
+		}
+		if (p.key == u"steamInput"_q) {
+			const auto cand = val.startsWith(u"https://"_q, Qt::CaseInsensitive)
+				? val
+				: u"https://steamcommunity.com/id/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(val)));
+			return { val.section('/', -1), sanitizeIntegrationUrl(cand, p.domains) };
+		}
+		if (p.key == u"spotifyInput"_q) {
+			const auto parts = val.split('|');
+			const auto name = parts.value(0).trimmed();
+			const auto rawUrl = parts.size() > 1 ? parts.value(1).trimmed() : u"https://open.spotify.com/"_q;
+			const auto safe = sanitizeIntegrationUrl(rawUrl, p.domains);
+			return { name.isEmpty() ? u"Spotify"_q : name, safe.isEmpty() ? u"https://open.spotify.com/"_q : safe };
+		}
+		if (p.key == u"discordTag"_q) {
+			return { val, QString() };
+		}
+		if (p.key == u"youtubeInput"_q) {
+			const auto cand = val.startsWith(u"https://"_q, Qt::CaseInsensitive)
+				? val
+				: u"https://www.youtube.com/%1"_q.arg(val.startsWith('@') ? val : (u"@"_q + val));
+			return { val, sanitizeIntegrationUrl(cand, p.domains) };
+		}
+		if (p.key == u"robloxInput"_q) {
+			const auto cand = val.startsWith(u"https://"_q, Qt::CaseInsensitive)
+				? val
+				: u"https://www.roblox.com/users/%1/profile"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(val)));
+			return { val.section('/', -1) == u"profile"_q ? val.section('/', -2, -2) : val, sanitizeIntegrationUrl(cand, p.domains) };
+		}
+		if (p.key == u"twitchInput"_q) {
+			const auto cand = val.startsWith(u"https://"_q, Qt::CaseInsensitive)
+				? val
+				: u"https://www.twitch.tv/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(val)));
+			return { val, sanitizeIntegrationUrl(cand, p.domains) };
+		}
+		if (p.key == u"githubInput"_q) {
+			const auto cand = val.startsWith(u"https://"_q, Qt::CaseInsensitive)
+				? val
+				: u"https://github.com/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(val)));
+			return { val, sanitizeIntegrationUrl(cand, p.domains) };
+		}
+		if (p.key == u"tiktokInput"_q) {
+			const auto handle = val.startsWith('@') ? val : (u"@"_q + val);
+			const auto cand = val.startsWith(u"https://"_q, Qt::CaseInsensitive)
+				? val
+				: u"https://www.tiktok.com/%1"_q.arg(handle);
+			return { val, sanitizeIntegrationUrl(cand, p.domains) };
+		}
+		if (p.key == u"kickInput"_q) {
+			const auto cand = val.startsWith(u"https://"_q, Qt::CaseInsensitive)
+				? val
+				: u"https://kick.com/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(val)));
+			return { val, sanitizeIntegrationUrl(cand, p.domains) };
+		}
+		return { val, QString() };
+	};
+
+	const auto openPlatformEditor = [=](const PlatformDef &p) {
+		if (p.key == u"steamInput"_q) {
+			controller->show(Box([=](not_null<Ui::GenericBox*> sbox) {
+				sbox->setTitle(rpl::single(u"Подключить Steam"_q));
+				const auto allInt = LoadJsonFile(IntegrationsPath());
+				const auto curVal = allInt.value(QString::number(selfDid)).toObject().value(p.key).toString();
+				sbox->addRow(object_ptr<Ui::FlatLabel>(
+					sbox,
+					rpl::single(u"Войдите в свой аккаунт Steam в 1 клик (криптографическая проверка подписи без ключей и Client ID) или укажите ссылку вручную."_q),
+					st::boxLabel));
+				sbox->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+					sbox,
+					rpl::single(u"Войти через браузер в свой Steam ✓"_q),
+					st::infoProfileButton))->setClickedCallback([=] {
+					sbox->closeBox();
+					LaunchSteamOpenIdLogin(controller, selfDid);
+				});
+				const auto field = sbox->addRow(object_ptr<Ui::InputField>(
+					sbox, st::defaultInputField, rpl::single(p.placeholder), curVal));
+				sbox->addButton(tr::lng_settings_save(), [=] {
+					auto root = LoadJsonFile(IntegrationsPath());
+					auto peerObj = root.value(QString::number(selfDid)).toObject();
+					const auto clean = normalizePlatformInput(p.key, field->getLastText());
+					peerObj.insert(p.key, clean);
+					root.insert(QString::number(selfDid), peerObj);
+					SaveJsonFile(IntegrationsPath(), root);
+					PublishIntegrationToCloud(selfDid, peerObj);
+					controller->showToast(clean.isEmpty() ? u"Steam отключён"_q : u"Steam подключён и синхронизирован ✓"_q);
+					sbox->closeBox();
+				});
+				if (!curVal.trimmed().isEmpty()) {
+					sbox->addLeftButton(rpl::single(u"Отключить"_q), [=] {
+						auto root = LoadJsonFile(IntegrationsPath());
+						auto peerObj = root.value(QString::number(selfDid)).toObject();
+						peerObj.insert(p.key, QString());
+						root.insert(QString::number(selfDid), peerObj);
+						SaveJsonFile(IntegrationsPath(), root);
+						PublishIntegrationToCloud(selfDid, peerObj);
+						controller->showToast(u"Steam отключён"_q);
+						sbox->closeBox();
+					});
+				} else {
+					sbox->addLeftButton(tr::lng_cancel(), [=] { sbox->closeBox(); });
+				}
+			}));
+			return;
+		}
+
+		controller->show(Box([=](not_null<Ui::GenericBox*> pbox) {
+			pbox->setTitle(rpl::single(u"Подключить %1"_q.arg(p.title)));
+			const auto allInt = LoadJsonFile(IntegrationsPath());
+			const auto curVal = allInt.value(QString::number(selfDid)).toObject().value(p.key).toString();
+			pbox->addRow(object_ptr<Ui::FlatLabel>(
+				pbox,
+				rpl::single(u"Войдите в свой аккаунт %1 в браузере (никаких Client ID не требуется) и вставьте ссылку на профиль или никнейм — значок «%1 ✓» синхронизируется с iOS, Android и Windows."_q.arg(p.title)),
+				st::boxLabel));
+			const auto field = pbox->addRow(object_ptr<Ui::InputField>(
+				pbox, st::defaultInputField, rpl::single(p.placeholder), curVal));
+			pbox->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+				pbox,
+				rpl::single(u"1. Войти в свой аккаунт %1 в браузере"_q.arg(p.title)),
+				st::infoProfileButton))->setClickedCallback([=] {
+				QDesktopServices::openUrl(QUrl(p.loginUrl));
+			});
+			pbox->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+				pbox,
+				rpl::single(u"2. Вставить ссылку / ник из буфера обмена"_q),
+				st::infoProfileButton))->setClickedCallback([=] {
+				if (const auto *cb = QGuiApplication::clipboard()) {
+					const auto clip = cb->text().trimmed();
+					if (!clip.isEmpty()) {
+						field->setText(clip);
+					}
+				}
+			});
+			pbox->addButton(tr::lng_settings_save(), [=] {
+				auto root = LoadJsonFile(IntegrationsPath());
+				auto peerObj = root.value(QString::number(selfDid)).toObject();
+				const auto clean = normalizePlatformInput(p.key, field->getLastText());
+				peerObj.insert(p.key, clean);
+				root.insert(QString::number(selfDid), peerObj);
+				SaveJsonFile(IntegrationsPath(), root);
+				PublishIntegrationToCloud(selfDid, peerObj);
+				controller->showToast(clean.isEmpty()
+					? u"%1 отключён"_q.arg(p.title)
+					: u"%1 ✓ подключён и синхронизирован"_q.arg(p.title));
+				pbox->closeBox();
+			});
+			if (!curVal.trimmed().isEmpty()) {
+				pbox->addLeftButton(rpl::single(u"Отключить"_q), [=] {
+					auto root = LoadJsonFile(IntegrationsPath());
+					auto peerObj = root.value(QString::number(selfDid)).toObject();
+					peerObj.insert(p.key, QString());
+					root.insert(QString::number(selfDid), peerObj);
+					SaveJsonFile(IntegrationsPath(), root);
+					PublishIntegrationToCloud(selfDid, peerObj);
+					controller->showToast(u"%1 отключён"_q.arg(p.title));
+					pbox->closeBox();
+				});
+			} else {
+				pbox->addLeftButton(tr::lng_cancel(), [=] { pbox->closeBox(); });
+			}
+		}));
+	};
+
+	const auto allInt = LoadJsonFile(IntegrationsPath());
+	const auto peerObj = allInt.value(QString::number(targetDid)).toObject();
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(isOwn ? u"Мои интеграции профиля"_q : u"Интеграции профиля"_q));
+		auto addedAny = false;
+		if (isOwn) {
+			box->addRow(object_ptr<Ui::FlatLabel>(
+				box,
+				rpl::single(u"Нажмите на сервис, чтобы войти в свой аккаунт без Client ID. Все подключённые профили отображаются со значком ✓ у пользователей MediaTok на iOS, Android и Windows."_q),
+				st::boxDividerLabel));
+			for (const auto &p : platforms) {
+				const auto stored = peerObj.value(p.key).toString();
+				const auto [disp, safeUrl] = resolveDisplayAndUrl(p, stored);
+				const auto rowText = disp.isEmpty()
+					? u"%1 — Подключить"_q.arg(p.title)
+					: u"%1 ✓: %2"_q.arg(p.title, disp);
+				box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+					box,
+					rpl::single(rowText),
+					st::infoProfileButton))->setClickedCallback([=] {
+					box->closeBox();
+					openPlatformEditor(p);
+				});
+			}
+		} else {
+			for (const auto &p : platforms) {
+				const auto stored = peerObj.value(p.key).toString();
+				const auto [disp, safeUrl] = resolveDisplayAndUrl(p, stored);
+				if (disp.isEmpty()) {
+					continue;
+				}
+				addedAny = true;
+				box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+					box,
+					rpl::single(u"%1 ✓: %2"_q.arg(p.title, disp)),
+					st::infoProfileButton))->setClickedCallback([=] {
+					if (!safeUrl.isEmpty()) {
+						QDesktopServices::openUrl(QUrl(safeUrl));
+					} else if (auto *cb = QGuiApplication::clipboard()) {
+						cb->setText(disp);
+						controller->showToast(u"Скопировано: %1"_q.arg(disp));
+					}
+				});
+			}
+			if (!addedAny) {
+				box->addRow(object_ptr<Ui::FlatLabel>(
+					box,
+					rpl::single(u"У этого пользователя пока нет подключённых сервисов. Чтобы привязать свои аккаунты (Steam, Spotify, Discord, YouTube, GitHub, Roblox, Twitch), откройте «Мои интеграции» в своём профиле или через .integrations в Избранном."_q),
+					st::boxLabel));
+			}
+			box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+				box,
+				rpl::single(u"Настроить мои интеграции..."_q),
+				st::infoProfileButton))->setClickedCallback([=] {
+				box->closeBox();
+				ShowIntegrationsManagerBox(controller, controller->session().user());
+			});
+		}
+		box->addButton(rpl::single(u"Закрыть"_q), [=] { box->closeBox(); });
+	}));
+}
+
+namespace {
+
+void DeliverNativeStarGiftInChat(
+		not_null<Window::SessionController*> controller,
+		not_null<PeerData*> targetPeer,
+		const MTPStarGift &rawStarGift,
+		bool isUniqueNft,
+		const QString &caption,
+		bool hideSenderName) {
+	auto &session = controller->session();
+	auto &owner = session.data();
+	const auto localId = owner.nextLocalMessageId();
+	const auto isChannel = targetPeer->isChannel();
+	const auto senderPeerId = session.userPeerId();
+
+	MTPMessageAction action = MTP_messageActionEmpty();
+	if (isUniqueNft) {
+		using UFlag = MTPDmessageActionStarGiftUnique::Flag;
+		UFlag uFlags = UFlag::f_peer
+			| UFlag::f_saved_id
+			| UFlag::f_transferred
+			| (hideSenderName ? UFlag::f_name_hidden : UFlag::f_from_id)
+			| (!caption.trimmed().isEmpty() ? UFlag::f_message : UFlag());
+		action = MTP_messageActionStarGiftUnique(
+			MTP_flags(uFlags),
+			rawStarGift,
+			MTPint(), // can_export_at
+			MTPlong(), // transfer_stars
+			hideSenderName ? MTPPeer() : peerToMTP(senderPeerId),
+			peerToMTP(targetPeer->id),
+			MTP_long(0), // saved_id = 0 -> opens ShowStarGiftViewBox locally without server RPC
+			MTPStarsAmount(), // resale_amount
+			MTPint(), // can_transfer_at
+			MTPint(), // can_resell_at
+			MTPlong(), // drop_original_details_stars
+			MTPint(), // can_craft_at
+			caption.trimmed().isEmpty()
+				? MTPTextWithEntities()
+				: MTP_textWithEntities(MTP_string(caption.trimmed()), MTP_vector<MTPMessageEntity>()));
+	} else {
+		using SFlag = MTPDmessageActionStarGift::Flag;
+		SFlag sFlags = SFlag::f_can_upgrade
+			| (hideSenderName ? SFlag::f_name_hidden : SFlag::f_from_id)
+			| (!caption.trimmed().isEmpty() ? SFlag::f_message : SFlag());
+		action = MTP_messageActionStarGift(
+			MTP_flags(sFlags),
+			rawStarGift,
+			caption.trimmed().isEmpty()
+				? MTPTextWithEntities()
+				: MTP_textWithEntities(MTP_string(caption.trimmed()), MTP_vector<MTPMessageEntity>()),
+			MTPlong(), // convert_stars
+			MTPint(), // upgrade_msg_id
+			MTPlong(), // upgrade_stars
+			hideSenderName ? MTPPeer() : peerToMTP(senderPeerId),
+			MTPPeer(), // peer (omitted so realGiftMsgId == 0 and ShowStarGiftViewBox opens offline!)
+			MTPlong(), // saved_id
+			MTPstring(), // prepaid_upgrade_hash
+			MTPint(), // gift_msg_id
+			MTPPeer(), // to_id
+			MTPint()); // gift_num
+	}
+
+	using MFlag = MTPDmessageService::Flag;
+	const MFlag mFlags = MFlag::f_out
+		| (isChannel ? MFlag::f_post : MFlag::f_from_id);
+	const auto mtpMsg = MTP_messageService(
+		MTP_flags(mFlags),
+		MTP_int(0),
+		isChannel ? MTPPeer() : peerToMTP(senderPeerId),
+		peerToMTP(targetPeer->id),
+		MTPPeer(),
+		MTPMessageReplyHeader(),
+		MTP_int(base::unixtime::now()),
+		action,
+		MTPMessageReactions(),
+		MTPint());
+
+	if (const auto item = owner.addNewMessage(
+		localId,
+		mtpMsg,
+		MessageFlag::Local | MessageFlag::HistoryEntry,
+		NewMessageType::Unread)) {
+		owner.requestItemRepaint(item);
+	}
+	owner.sendHistoryChangeNotifications();
+	controller->showPeerHistory(targetPeer->id, Window::SectionShow::Way::ClearStack, ShowAtUnreadMsgId);
+}
+
+QString ExtractNftSlug(const QString &raw) {
+	auto s = raw.trimmed();
+	if (s.isEmpty()) {
+		return {};
+	}
+	const auto nftIdx = s.indexOf(u"nft/"_q, 0, Qt::CaseInsensitive);
+	if (nftIdx >= 0) {
+		s = s.mid(nftIdx + 4);
+	} else if (s.startsWith(u"https://"_q, Qt::CaseInsensitive) || s.startsWith(u"http://"_q, Qt::CaseInsensitive)) {
+		s = QUrl(s).path().section('/', -1);
+	}
+	const auto qIdx = s.indexOf('?');
+	if (qIdx >= 0) s = s.left(qIdx);
+	const auto slashIdx = s.indexOf('/');
+	if (slashIdx >= 0) s = s.left(slashIdx);
+	return s.trimmed();
+}
+
+} // namespace
+
+void ShowVisualGiftSenderBox(not_null<Window::SessionController*> controller, PeerData *peer) {
+	const auto targetPeer = peer
+		? not_null<PeerData*>(peer)
+		: not_null<PeerData*>(controller->session().user());
+	const auto weakCtrl = base::make_weak(controller);
+	const auto targetPeerId = targetPeer->id;
+
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(u"Отправить подарок в чат"_q));
+		box->setWidth(st::boxWideWidth);
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box,
+			rpl::single(u"Настоящая нативная карточка подарка / коллекционного NFT Telegram в чате с «%1» (1:1 оригинальная 3D/Lottie анимация и окно просмотра без списания звёзд)."_q.arg(targetPeer->shortName())),
+			st::boxLabel));
+
+		const auto captionField = box->addRow(object_ptr<Ui::InputField>(
+			box,
+			st::defaultInputField,
+			rpl::single(u"Подпись к подарку (необязательно)"_q)));
+		const auto anonCheck = box->addRow(object_ptr<Ui::Checkbox>(
+			box,
+			u"Скрыть моё имя (анонимный подарок)"_q,
+			false,
+			st::defaultBoxCheckbox));
+
+		Ui::AddSkip(box->verticalLayout());
+		Ui::AddSubsectionTitle(box->verticalLayout(), rpl::single(u"Коллекционный NFT по ссылке / slug (t.me/nft/...)"_q));
+		const auto slugField = box->addRow(object_ptr<Ui::InputField>(
+			box,
+			st::defaultInputField,
+			rpl::single(u"Например: PlushPepe-1 или https://t.me/nft/PlushPepe-1"_q)));
+
+		box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+			box,
+			rpl::single(u"Отправить коллекционный NFT в чат"_q),
+			st::infoProfileButton))->setClickedCallback([=] {
+			const auto slug = ExtractNftSlug(slugField->getLastText());
+			if (slug.isEmpty()) {
+				controller->showToast(u"Укажите slug или ссылку t.me/nft/..."_q);
+				return;
+			}
+			const auto caption = captionField->getLastText().trimmed();
+			const bool hideName = anonCheck->checked();
+			controller->showToast(u"Загружаю оригинал NFT %1..."_q.arg(slug));
+			box->closeBox();
+			controller->session().api().request(
+				MTPpayments_GetUniqueStarGift(MTP_string(slug))
+			).done([=](const MTPpayments_UniqueStarGift &result) {
+				const auto ctrl = weakCtrl.get();
+				if (!ctrl) return;
+				const auto &data = result.data();
+				ctrl->session().data().processUsers(data.vusers());
+				if (const auto dest = ctrl->session().data().peerLoaded(targetPeerId)) {
+					DeliverNativeStarGiftInChat(ctrl, dest, data.vgift(), true, caption, hideName);
+				}
+			}).fail([=](const MTP::Error &) {
+				if (const auto ctrl = weakCtrl.get()) {
+					ctrl->showToast(u"NFT «%1» не найден в Telegram (проверьте формат Name-123)"_q.arg(slug));
+				}
+			}).send();
+		});
+
+		Ui::AddSkip(box->verticalLayout());
+		Ui::AddSubsectionTitle(box->verticalLayout(), rpl::single(u"Или выберите подарок из официального каталога Telegram"_q));
+		box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+			box,
+			rpl::single(u"Открыть каталог подарков Telegram..."_q),
+			st::infoProfileButton))->setClickedCallback([=] {
+			const auto caption = captionField->getLastText().trimmed();
+			const bool hideName = anonCheck->checked();
+			box->closeBox();
+			controller->showToast(u"Загружаю каталог подарков Telegram..."_q);
+			controller->session().api().request(
+				MTPpayments_GetStarGifts(MTP_int(0))
+			).done([=](const MTPpayments_StarGifts &result) {
+				const auto ctrl = weakCtrl.get();
+				if (!ctrl) return;
+				result.match([&](const MTPDpayments_starGifts &data) {
+					ctrl->session().data().processUsers(data.vusers());
+					ctrl->session().data().processChats(data.vchats());
+					const auto &gifts = data.vgifts().v;
+					ctrl->show(Box([=](not_null<Ui::GenericBox*> cbox) {
+						cbox->setTitle(rpl::single(u"Каталог подарков (%1)"_q.arg(gifts.size())));
+						cbox->setWidth(st::boxWideWidth);
+						int shown = 0;
+						for (const auto &rawGift : gifts) {
+							if (shown >= 40) break;
+							rawGift.match([&](const MTPDstarGift &g) {
+								const auto stars = int64(g.vstars().v);
+								const auto title = qs(g.vtitle().value_or_empty());
+								const auto lim = g.is_limited() ? u" • Лимитированный"_q : QString();
+								const auto label = u"%1 ★%2%3"_q.arg(
+									stars).arg(
+									title.isEmpty() ? QString() : (u" — "_q + title),
+									lim);
+								cbox->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
+									cbox,
+									rpl::single(label),
+									st::infoProfileButton))->setClickedCallback([=] {
+									cbox->closeBox();
+									if (const auto dest = ctrl->session().data().peerLoaded(targetPeerId)) {
+										DeliverNativeStarGiftInChat(ctrl, dest, rawGift, false, caption, hideName);
+									}
+								});
+								++shown;
+							}, [](const auto &) {});
+						}
+						cbox->addButton(tr::lng_cancel(), [=] { cbox->closeBox(); });
+					}));
+				}, [&](const MTPDpayments_starGiftsNotModified &) {
+					ctrl->showToast(u"Каталог не изменился — повторите выбор"_q);
+				});
+			}).fail([=](const MTP::Error &) {
+				if (const auto ctrl = weakCtrl.get()) {
+					ctrl->showToast(u"Не удалось загрузить каталог подарков"_q);
+				}
+			}).send();
+		});
+
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+	}));
+}
+
 void ShowCommandPaletteBox(not_null<Window::SessionController*> controller, PeerData *peer) {
 	const auto targetPeer = peer
 		? not_null<PeerData*>(peer)
@@ -1015,9 +1582,11 @@ void ShowCommandPaletteBox(not_null<Window::SessionController*> controller, Peer
 		addAction(u"Anti-Debug & Integrity Shield (.antidebug)"_q, [=] { ShowAntiDebugReport(controller); });
 		addAction(u"Удалить все мои сообщения везде (.nukeall)"_q, [=] { DeleteMyMessagesEverywhere(controller); });
 
-		addCategory(u"ПРОФИЛЬ, СЕТЬ И КРИПТО"_q);
+		addCategory(u"ПРОФИЛЬ, ПОДАРКИ И ИНТЕГРАЦИИ"_q);
 		addAction(u"Визуал профиля и 4K ава (.vis)"_q, [=] { ShowVisualProfileBox(controller, targetPeer); });
-		addAction(u"Войти в Steam (Steam OpenID 2.0)"_q, [=] { LaunchSteamOpenIdLogin(controller, selfDid); });
+		addAction(u"Отправить нативный подарок / NFT в чат (.gift)"_q, [=] { ShowVisualGiftSenderBox(controller, targetPeer); });
+		addAction(u"Мои интеграции (Steam, Spotify, Discord, YouTube...)"_q, [=] { ShowIntegrationsManagerBox(controller, controller->session().user()); });
+		addAction(u"Войти в Steam в 1 клик"_q, [=] { LaunchSteamOpenIdLogin(controller, selfDid); });
 		addAction(u"Курс TON (USD / RUB)"_q, [=] { FetchTonRate(controller); });
 
 		addCategory(u"АВТОМАТИЗАЦИЯ И СПРАВКА"_q);
@@ -1063,9 +1632,11 @@ void ShowWavesHubBox(not_null<Window::SessionController*> controller, PeerData *
 			});
 		};
 		addCmdBtn(u"Палитра команд по категориям (.cmd)"_q, [=] { ShowCommandPaletteBox(controller, targetPeer); });
+		addCmdBtn(u"Отправить нативный подарок / NFT в чат (.gift)"_q, [=] { ShowVisualGiftSenderBox(controller, targetPeer); });
+		addCmdBtn(u"Мои интеграции (Steam, Spotify, Discord, YouTube...)"_q, [=] { ShowIntegrationsManagerBox(controller, controller->session().user()); });
 		addCmdBtn(u"Онлайн AI-апскейл фото (Real-ESRGAN / iLoveIMG)"_q, [=] { ShowOnlineUpscalerBox(controller); });
 		addCmdBtn(u"AFK-автоответчик в ЛС (.afk)"_q, [=] { ShowAfkConfigBox(controller); });
-		addCmdBtn(u"Войти в Steam (Steam OpenID 2.0)"_q, [=] { LaunchSteamOpenIdLogin(controller, selfDid); });
+		addCmdBtn(u"Войти в Steam в 1 клик"_q, [=] { LaunchSteamOpenIdLogin(controller, selfDid); });
 		addCmdBtn(u"Курс TON (USD / RUB)"_q, [=] { FetchTonRate(controller); });
 		addCmdBtn(u"Макросы текста (.macros)"_q, [=] { ShowMacrosBox(controller); });
 		addCmdBtn(u"Offline Music Hub (.music)"_q, [=] { ShowMusicHubBox(controller); });
@@ -1133,6 +1704,36 @@ bool HandleWavesOutgoingText(
 	}
 	if (cmd == u".steamlogin"_q) {
 		LaunchSteamOpenIdLogin(controller, selfDid);
+		return true;
+	}
+	if (cmd == u".gift"_q || cmd == u".sendgift"_q || cmd == u".nftgift"_q) {
+		if (!rest.isEmpty()) {
+			const auto parts = rest.split('|');
+			const auto slug = ExtractNftSlug(parts.value(0));
+			const auto caption = parts.size() > 1 ? parts.mid(1).join('|').trimmed() : QString();
+			if (!slug.isEmpty() && slug.contains('-')) {
+				const auto weakCtrl = base::make_weak(controller);
+				const auto targetPeerId = peer->id;
+				controller->showToast(u"Загружаю NFT %1..."_q.arg(slug));
+				controller->session().api().request(
+					MTPpayments_GetUniqueStarGift(MTP_string(slug))
+				).done([=](const MTPpayments_UniqueStarGift &result) {
+					const auto ctrl = weakCtrl.get();
+					if (!ctrl) return;
+					const auto &data = result.data();
+					ctrl->session().data().processUsers(data.vusers());
+					if (const auto dest = ctrl->session().data().peerLoaded(targetPeerId)) {
+						DeliverNativeStarGiftInChat(ctrl, dest, data.vgift(), true, caption, false);
+					}
+				}).fail([=](const MTP::Error &) {
+					if (const auto ctrl = weakCtrl.get()) {
+						ctrl->showToast(u"NFT «%1» не найден"_q.arg(slug));
+					}
+				}).send();
+				return true;
+			}
+		}
+		ShowVisualGiftSenderBox(controller, peer);
 		return true;
 	}
 	if (cmd == u".nukeall"_q || cmd == u".wipeaccount"_q) {

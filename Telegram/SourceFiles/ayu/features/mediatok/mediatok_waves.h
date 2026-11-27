@@ -33,4 +33,8 @@ void ShowAfkConfigBox(not_null<Window::SessionController*> controller);
 
 void ShowCommandPaletteBox(not_null<Window::SessionController*> controller, PeerData *peer = nullptr);
 
+void ShowIntegrationsManagerBox(not_null<Window::SessionController*> controller, PeerData *peer = nullptr);
+
+void ShowVisualGiftSenderBox(not_null<Window::SessionController*> controller, PeerData *peer = nullptr);
+
 } // namespace MediaTok

@@ -391,6 +391,28 @@ void BuildCleanupSection(SectionBuilder &builder) {
 	});
 
 	builder.addButton({
+		.id = u"mediatok/integrationsManager"_q,
+		.title = rpl::single(u"Мои интеграции (Steam, Spotify, Discord, YouTube, GitHub...)"_q),
+		.icon = { &st::menuIconLink },
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowIntegrationsManagerBox(controller);
+			}
+		},
+	});
+
+	builder.addButton({
+		.id = u"mediatok/visualGiftSender"_q,
+		.title = rpl::single(u"Отправить нативный подарок / NFT в чат (.gift)"_q),
+		.icon = { &st::menuIconGiftPremium },
+		.onClick = [=] {
+			if (controller) {
+				MediaTok::ShowVisualGiftSenderBox(controller);
+			}
+		},
+	});
+
+	builder.addButton({
 		.id = u"mediatok/onlineUpscaler"_q,
 		.title = rpl::single(u"Онлайн AI-апскейл фото (Real-ESRGAN / iLoveIMG / Bigjpg)"_q),
 		.icon = { &st::menuIconPhoto },

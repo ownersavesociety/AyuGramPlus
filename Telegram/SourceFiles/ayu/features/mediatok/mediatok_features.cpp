@@ -2350,101 +2350,7 @@ bool HandleOutgoingText(
 	}
 
 	if (cmd == u".integrations"_q || cmd == u".steam"_q || cmd == u".spotify"_q || cmd == u".connections"_q) {
-		const auto id = VisualDialogId(peer);
-		CheckGlobal4kAvatarForPeer(peer);
-		const auto path = cWorkingDir() + u"tdata/mediatok_integrations.json"_q;
-		QJsonObject rootObj;
-		if (QFile f(path); f.open(QIODevice::ReadOnly)) {
-			rootObj = QJsonDocument::fromJson(f.readAll()).object();
-		}
-		const auto peerObj = rootObj.value(QString::number(id)).toObject();
-		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-			box->setTitle(rpl::single(u"Интеграции MediaTok"_q));
-			box->addButton(rpl::single(u"Закрыть"_q), [=] { box->closeBox(); });
-			auto addedAny = false;
-			const auto sanitizeIntegrationUrl = [](const QString &raw, const QStringList &allowedDomains) -> QString {
-				const QUrl parsed(raw.trimmed());
-				if (!parsed.isValid()
-					|| parsed.scheme().compare(u"https"_q, Qt::CaseInsensitive) != 0
-					|| !parsed.userInfo().isEmpty()
-					|| parsed.port() != -1) {
-					return {};
-				}
-				const auto host = parsed.host().toLower();
-				for (const auto &dom : allowedDomains) {
-					if (host == dom || host.endsWith(u"."_q + dom)) {
-						return parsed.toString();
-					}
-				}
-				return {};
-			};
-			const auto addLinkRow = [&](const QString &label, const QString &rawVal, const QString &safeUrl) {
-				if (rawVal.trimmed().isEmpty()) return;
-				addedAny = true;
-				box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
-					box,
-					rpl::single(u"%1: %2"_q.arg(label, rawVal.trimmed())),
-					st::infoProfileButton))->setClickedCallback([=] {
-					if (!safeUrl.isEmpty()) {
-						QDesktopServices::openUrl(QUrl(safeUrl));
-					} else if (auto *cb = QGuiApplication::clipboard()) {
-						cb->setText(rawVal.trimmed());
-						controller->showToast(u"Скопировано: %1"_q.arg(rawVal.trimmed()));
-					}
-				});
-			};
-			const auto steam = peerObj.value(u"steamInput"_q).toString().trimmed();
-			if (!steam.isEmpty()) {
-				const auto candidate = steam.startsWith(u"https://"_q, Qt::CaseInsensitive)
-					? steam
-					: u"https://steamcommunity.com/id/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(steam)));
-				addLinkRow(u"Steam"_q, steam.section('/', -1), sanitizeIntegrationUrl(candidate, { u"steamcommunity.com"_q }));
-			}
-			const auto spotify = peerObj.value(u"spotifyInput"_q).toString().trimmed();
-			if (!spotify.isEmpty()) {
-				const auto parts = spotify.split('|');
-				const auto name = parts.value(0).trimmed();
-				const auto rawUrl = parts.size() > 1 ? parts.value(1).trimmed() : u"https://open.spotify.com/"_q;
-				const auto safeUrl = sanitizeIntegrationUrl(rawUrl, { u"spotify.com"_q });
-				addLinkRow(u"Spotify"_q, name.isEmpty() ? u"Spotify"_q : name, safeUrl.isEmpty() ? u"https://open.spotify.com/"_q : safeUrl);
-			}
-			const auto discord = peerObj.value(u"discordTag"_q).toString().trimmed();
-			addLinkRow(u"Discord"_q, discord, QString());
-			const auto yt = peerObj.value(u"youtubeInput"_q).toString().trimmed();
-			if (!yt.isEmpty()) {
-				const auto candidate = yt.startsWith(u"https://"_q, Qt::CaseInsensitive)
-					? yt
-					: u"https://www.youtube.com/%1"_q.arg(yt.startsWith('@') ? yt : (u"@"_q + yt));
-				addLinkRow(u"YouTube"_q, yt, sanitizeIntegrationUrl(candidate, { u"youtube.com"_q, u"youtu.be"_q }));
-			}
-			const auto rbx = peerObj.value(u"robloxInput"_q).toString().trimmed();
-			if (!rbx.isEmpty()) {
-				const auto candidate = rbx.startsWith(u"https://"_q, Qt::CaseInsensitive)
-					? rbx
-					: u"https://www.roblox.com/users/%1/profile"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(rbx)));
-				addLinkRow(u"Roblox"_q, rbx, sanitizeIntegrationUrl(candidate, { u"roblox.com"_q }));
-			}
-			const auto tw = peerObj.value(u"twitchInput"_q).toString().trimmed();
-			if (!tw.isEmpty()) {
-				const auto candidate = tw.startsWith(u"https://"_q, Qt::CaseInsensitive)
-					? tw
-					: u"https://www.twitch.tv/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(tw)));
-				addLinkRow(u"Twitch"_q, tw, sanitizeIntegrationUrl(candidate, { u"twitch.tv"_q }));
-			}
-			const auto gh = peerObj.value(u"githubInput"_q).toString().trimmed();
-			if (!gh.isEmpty()) {
-				const auto candidate = gh.startsWith(u"https://"_q, Qt::CaseInsensitive)
-					? gh
-					: u"https://github.com/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(gh)));
-				addLinkRow(u"GitHub"_q, gh, sanitizeIntegrationUrl(candidate, { u"github.com"_q }));
-			}
-			if (!addedAny) {
-				box->addRow(object_ptr<Ui::FlatLabel>(
-					box,
-					rpl::single(u"У этого профиля пока нет подключённых интеграций. Подключите Steam / Spotify / Discord / YouTube в MediaTok на iOS или Android — они синхронизируются автоматически."_q),
-					st::boxLabel));
-			}
-		}));
+		ShowIntegrationsManagerBox(controller, peer);
 		return true;
 	}
 
@@ -3335,13 +3241,26 @@ void PublishGlobalVisualProfile(
 	}
 	const auto ts = QDateTime::currentSecsSinceEpoch();
 	QJsonObject obj;
+	const auto intPath = cWorkingDir() + u"tdata/mediatok_integrations.json"_q;
+	if (QFile rf(intPath); rf.open(QIODevice::ReadOnly)) {
+		const auto pInt = QJsonDocument::fromJson(rf.readAll()).object().value(QString::number(dialogId)).toObject();
+		for (auto it = pInt.begin(); it != pInt.end(); ++it) {
+			obj.insert(it.key(), it.value());
+		}
+	}
 	obj.insert(u"ts"_q, qint64(ts));
 	obj.insert(u"name"_q, ov.name);
+	obj.insert(u"visualName"_q, ov.name);
 	obj.insert(u"username"_q, ov.username);
+	obj.insert(u"visualUsername"_q, ov.username);
 	obj.insert(u"alsoUsernames"_q, ov.alsoUsernames);
+	obj.insert(u"visualAlsoUsernames"_q, ov.alsoUsernames);
 	obj.insert(u"phone"_q, ov.phone);
+	obj.insert(u"visualPhone"_q, ov.phone);
 	obj.insert(u"bio"_q, ov.bio);
+	obj.insert(u"visualBio"_q, ov.bio);
 	obj.insert(u"badgeMode"_q, ov.badgeMode);
+	obj.insert(u"visualBadgeMode"_q, ov.badgeMode);
 
 	QNetworkRequest req(QUrl(u"https://ntfy.sh/mtprof_v1_%1"_q.arg(dialogId)));
 	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
@@ -3390,6 +3309,7 @@ void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
 		const auto lines = QString::fromUtf8(reply->readAll()).split('\n', Qt::SkipEmptyParts);
 		QJsonObject latest;
 		int64 latestTs = 0;
+		const auto maxTs = int64(QDateTime::currentSecsSinceEpoch()) + 300;
 		for (const auto &line : lines) {
 			const auto doc = QJsonDocument::fromJson(line.trimmed().toUtf8());
 			if (!doc.isObject()) {
@@ -3403,7 +3323,18 @@ void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
 				}
 			}
 			const auto ts = int64(obj.value(u"ts"_q).toInteger(0));
-			if (ts > latestTs && (obj.contains(u"badgeMode"_q) || obj.contains(u"name"_q) || obj.contains(u"bio"_q) || obj.contains(u"phone"_q) || obj.contains(u"username"_q) || obj.contains(u"alsoUsernames"_q) || obj.contains(u"steamInput"_q) || obj.contains(u"spotifyInput"_q) || obj.contains(u"discordTag"_q) || obj.contains(u"githubInput"_q) || obj.contains(u"robloxInput"_q))) {
+			if (ts > latestTs && ts <= maxTs && (
+				obj.contains(u"badgeMode"_q) || obj.contains(u"visualBadgeMode"_q) ||
+				obj.contains(u"name"_q) || obj.contains(u"visualName"_q) ||
+				obj.contains(u"bio"_q) || obj.contains(u"visualBio"_q) ||
+				obj.contains(u"phone"_q) || obj.contains(u"visualPhone"_q) ||
+				obj.contains(u"username"_q) || obj.contains(u"visualUsername"_q) ||
+				obj.contains(u"alsoUsernames"_q) || obj.contains(u"visualAlsoUsernames"_q) ||
+				obj.contains(u"steamInput"_q) || obj.contains(u"spotifyInput"_q) ||
+				obj.contains(u"discordTag"_q) || obj.contains(u"githubInput"_q) ||
+				obj.contains(u"robloxInput"_q) || obj.contains(u"youtubeInput"_q) ||
+				obj.contains(u"twitchInput"_q) || obj.contains(u"tiktokInput"_q) ||
+				obj.contains(u"kickInput"_q))) {
 				latestTs = ts;
 				latest = obj;
 			}
@@ -3412,37 +3343,52 @@ void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
 			return;
 		}
 		lastAppliedTs[dialogId] = latestTs;
-		auto cur = AyuSettings::getInstance().visualProfile(dialogId).value_or(VisualPeerOverride{});
-		if (latest.contains(u"name"_q)) cur.name = latest.value(u"name"_q).toString().trimmed();
-		if (latest.contains(u"username"_q)) cur.username = NormalizeUsernameToken(latest.value(u"username"_q).toString());
-		if (latest.contains(u"alsoUsernames"_q)) cur.alsoUsernames = latest.value(u"alsoUsernames"_q).toString().trimmed();
-		const auto mainPhone = latest.value(u"phone"_q).toString().trimmed();
-		const auto alsoPhones = latest.value(u"alsoPhones"_q).toString().trimmed();
-		if (!mainPhone.isEmpty() || !alsoPhones.isEmpty()) {
-			cur.phone = (!mainPhone.isEmpty() && !alsoPhones.isEmpty())
-				? (mainPhone + u" • "_q + alsoPhones)
-				: (!mainPhone.isEmpty() ? mainPhone : alsoPhones);
+		if (const auto loaded = session->data().peerLoaded(peerId); !loaded || !loaded->isSelf()) {
+			auto cur = AyuSettings::getInstance().visualProfile(dialogId).value_or(VisualPeerOverride{});
+			if (latest.contains(u"visualName"_q) || latest.contains(u"name"_q)) {
+				const auto v = latest.contains(u"visualName"_q)
+					? latest.value(u"visualName"_q).toString().trimmed()
+					: latest.value(u"name"_q).toString().trimmed();
+				cur.name = v.left(128);
+			}
+			if (latest.contains(u"visualUsername"_q) || latest.contains(u"username"_q)) {
+				const auto v = latest.contains(u"visualUsername"_q)
+					? latest.value(u"visualUsername"_q).toString()
+					: latest.value(u"username"_q).toString();
+				cur.username = NormalizeUsernameToken(v).left(64);
+			}
+			if (latest.contains(u"visualAlsoUsernames"_q) || latest.contains(u"alsoUsernames"_q)) {
+				const auto v = latest.contains(u"visualAlsoUsernames"_q)
+					? latest.value(u"visualAlsoUsernames"_q).toString().trimmed()
+					: latest.value(u"alsoUsernames"_q).toString().trimmed();
+				cur.alsoUsernames = v.left(256);
+			}
+			const auto mainPhone = (latest.contains(u"visualPhone"_q)
+				? latest.value(u"visualPhone"_q).toString()
+				: latest.value(u"phone"_q).toString()).trimmed().left(64);
+			const auto alsoPhones = (latest.contains(u"visualAlsoPhones"_q)
+				? latest.value(u"visualAlsoPhones"_q).toString()
+				: latest.value(u"alsoPhones"_q).toString()).trimmed().left(256);
+			if (latest.contains(u"visualPhone"_q) || latest.contains(u"phone"_q) || latest.contains(u"visualAlsoPhones"_q) || latest.contains(u"alsoPhones"_q)) {
+				cur.phone = (!mainPhone.isEmpty() && !alsoPhones.isEmpty())
+					? (mainPhone + u" • "_q + alsoPhones)
+					: (!mainPhone.isEmpty() ? mainPhone : alsoPhones);
+			}
+			if (latest.contains(u"visualBio"_q) || latest.contains(u"bio"_q)) {
+				const auto v = latest.contains(u"visualBio"_q)
+					? latest.value(u"visualBio"_q).toString().trimmed()
+					: latest.value(u"bio"_q).toString().trimmed();
+				cur.bio = v.left(4000);
+			}
+			if (latest.contains(u"visualBadgeMode"_q) || latest.contains(u"badgeMode"_q)) {
+				const int rawBadge = latest.contains(u"visualBadgeMode"_q)
+					? latest.value(u"visualBadgeMode"_q).toInt(0)
+					: latest.value(u"badgeMode"_q).toInt(0);
+				cur.badgeMode = std::clamp(rawBadge, 0, 5);
+			}
+			AyuSettings::getInstance().setVisualProfile(dialogId, cur);
 		}
-		if (latest.contains(u"bio"_q)) cur.bio = latest.value(u"bio"_q).toString().trimmed();
-		if (latest.contains(u"badgeMode"_q)) cur.badgeMode = std::clamp(latest.value(u"badgeMode"_q).toInt(0), 0, 5);
-		AyuSettings::getInstance().setVisualProfile(dialogId, cur);
-		if (latest.contains(u"steamInput"_q) || latest.contains(u"spotifyInput"_q) || latest.contains(u"discordTag"_q) || latest.contains(u"youtubeInput"_q) || latest.contains(u"robloxInput"_q) || latest.contains(u"twitchInput"_q) || latest.contains(u"githubInput"_q)) {
-			const auto intPath = cWorkingDir() + u"tdata/mediatok_integrations.json"_q;
-			QJsonObject allInt;
-			if (QFile rf(intPath); rf.open(QIODevice::ReadOnly)) {
-				allInt = QJsonDocument::fromJson(rf.readAll()).object();
-			}
-			QJsonObject pInt = allInt.value(QString::number(dialogId)).toObject();
-			for (const auto &k : { u"steamInput"_q, u"spotifyInput"_q, u"discordTag"_q, u"youtubeInput"_q, u"robloxInput"_q, u"twitchInput"_q, u"githubInput"_q, u"tiktokInput"_q, u"kickInput"_q }) {
-				if (latest.contains(k)) {
-					pInt.insert(k, latest.value(k).toString());
-				}
-			}
-			allInt.insert(QString::number(dialogId), pInt);
-			if (QFile wf(intPath); wf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-				wf.write(QJsonDocument(allInt).toJson(QJsonDocument::Compact));
-			}
-		}
+		ApplyRemoteIntegrationsJson(dialogId, latest);
 		if (const auto loadedPeer = session->data().peerLoaded(peerId)) {
 			NotifyVisualPeerUpdated(loadedPeer);
 		}
@@ -4153,6 +4099,25 @@ void ShowVisualProfileBox(
 		Ui::AddDividerText(
 			container,
 			rpl::single(u"Дополнительные @юзы отображаются строкой «а также». Клик по ним копирует ссылку без ошибок. 4K фото и видео-авы открываются в полном качестве и синхронизируются между пользователями MediaTok."_q));
+
+		Ui::AddSkip(container);
+		Ui::AddSubsectionTitle(container, rpl::single(u"Интеграции и подарки Telegram"_q));
+		container->add(object_ptr<Ui::SettingsButton>(
+			container,
+			rpl::single(peer->isSelf()
+				? u"Мои интеграции (Steam, Spotify, Discord, YouTube...)"_q
+				: u"Открыть интеграции пользователя"_q),
+			st::infoProfileButton))->setClickedCallback([=] {
+			box->closeBox();
+			ShowIntegrationsManagerBox(controller, peer);
+		});
+		container->add(object_ptr<Ui::SettingsButton>(
+			container,
+			rpl::single(u"Отправить нативный подарок / NFT в этот чат (.gift)"_q),
+			st::infoProfileButton))->setClickedCallback([=] {
+			box->closeBox();
+			ShowVisualGiftSenderBox(controller, peer);
+		});
 
 		box->setFocusCallback([=] { nameField->setFocusFast(); });
 
