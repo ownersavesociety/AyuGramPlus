@@ -260,7 +260,8 @@ void LaunchSteamOpenIdLogin(
 		return;
 	}
 	const quint16 port = server->serverPort();
-	const auto returnTo = u"http://127.0.0.1:%1/steam"_q.arg(port);
+	const auto stateNonce = QString::number(base::RandomValue<uint64>(), 16);
+	const auto returnTo = u"http://127.0.0.1:%1/steam?mt_state=%2"_q.arg(port).arg(stateNonce);
 	const auto realm = u"http://127.0.0.1:%1/"_q.arg(port);
 
 	auto *timeout = new QTimer(server);
@@ -282,7 +283,18 @@ void LaunchSteamOpenIdLogin(
 			const auto firstLine = rawReq.section('\r', 0, 0);
 			const auto reqPath = firstLine.section(' ', 1, 1);
 			const QUrl parsed(u"http://127.0.0.1%1"_q.arg(reqPath));
+			if (parsed.path() != u"/steam"_q) {
+				sock->write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+				sock->disconnectFromHost();
+				return;
+			}
 			const QUrlQuery query(parsed);
+			if (query.queryItemValue(u"mt_state"_q, QUrl::FullyDecoded) != stateNonce) {
+				sock->write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+				sock->disconnectFromHost();
+				return;
+			}
+			const auto opEndpoint = query.queryItemValue(u"openid.op_endpoint"_q, QUrl::FullyDecoded);
 			const auto claimed = query.queryItemValue(u"openid.claimed_id"_q, QUrl::FullyDecoded);
 			const auto steamId64 = claimed.section('/', -1);
 
@@ -294,6 +306,13 @@ void LaunchSteamOpenIdLogin(
 			sock->disconnectFromHost();
 			server->close();
 			server->deleteLater();
+
+			if (opEndpoint != u"https://steamcommunity.com/openid/login"_q) {
+				if (const auto ctrl = weakCtrl.get()) {
+					ctrl->showToast(u"Неверный OpenID endpoint от Steam"_q);
+				}
+				return;
+			}
 
 			bool allDigits = !steamId64.isEmpty();
 			for (const auto ch : steamId64) {
@@ -312,14 +331,21 @@ void LaunchSteamOpenIdLogin(
 			// Verify OpenID cryptographic signature directly with Steam
 			QUrlQuery verifyQuery;
 			for (const auto &pair : query.queryItems(QUrl::FullyDecoded)) {
-				if (pair.first != u"openid.mode"_q) {
+				if (pair.first != u"openid.mode"_q && pair.first != u"mt_state"_q) {
 					verifyQuery.addQueryItem(pair.first, pair.second);
 				}
 			}
 			verifyQuery.addQueryItem(u"openid.mode"_q, u"check_authentication"_q);
-			QNetworkRequest vReq(QUrl(u"https://steamcommunity.com/openid/login"_q));
+			QNetworkRequest vReq{ QUrl(u"https://steamcommunity.com/openid/login"_q) };
 			vReq.setHeader(QNetworkRequest::ContentTypeHeader, u"application/x-www-form-urlencoded"_q);
 			QPointer<QNetworkReply> vReply = WavesNet().post(vReq, verifyQuery.toString(QUrl::FullyEncoded).toUtf8());
+			auto *vTimer = new QTimer(vReply);
+			vTimer->setSingleShot(true);
+			vTimer->setInterval(20000);
+			QObject::connect(vTimer, &QTimer::timeout, vReply, [=] {
+				if (vReply) vReply->abort();
+			});
+			vTimer->start();
 			QObject::connect(vReply, &QNetworkReply::finished, [=] {
 				if (!vReply) {
 					return;
@@ -653,7 +679,7 @@ void ShowMusicHubBox(not_null<Window::SessionController*> controller) {
 
 // MARK: - Online Cloud Real-ESRGAN Upscaler (.upscale / .4k) + iLoveIMG / Bigjpg (Zero Offline Waifu2x)
 
-QString ExtractGradioImageUrl(const QString &sseText, const QString &baseUrl) {
+QString ExtractGradioImageUrl(const QString &sseText, const QString &baseUrl, const QString &filePrefix) {
 	const auto lines = sseText.split('\n');
 	for (int i = lines.size() - 1; i >= 0; --i) {
 		const auto trimmed = lines[i].trimmed();
@@ -670,22 +696,33 @@ QString ExtractGradioImageUrl(const QString &sseText, const QString &baseUrl) {
 			if (item.isObject()) {
 				const auto obj = item.toObject();
 				const auto url = obj.value(u"url"_q).toString();
-				if (url.startsWith(u"http"_q)) {
+				if (url.startsWith(u"https://"_q)) {
 					return url;
 				}
 				const auto path = obj.value(u"path"_q).toString();
 				if (!path.isEmpty()) {
-					if (path.startsWith(u"http"_q)) {
+					if (path.startsWith(u"https://"_q)) {
 						return path;
 					}
-					return baseUrl + u"/gradio_api/file="_q + path;
+					return baseUrl + filePrefix + path;
 				}
-			} else if (item.isString() && item.toString().startsWith(u"http"_q)) {
+			} else if (item.isString() && item.toString().startsWith(u"https://"_q)) {
 				return item.toString();
 			}
 		}
 	}
 	return {};
+}
+
+void AttachReplyTimeout(QPointer<QNetworkReply> reply, int timeoutMs) {
+	if (!reply) return;
+	auto *timer = new QTimer(reply);
+	timer->setSingleShot(true);
+	timer->setInterval(timeoutMs);
+	QObject::connect(timer, &QTimer::timeout, reply, [=] {
+		if (reply) reply->abort();
+	});
+	timer->start();
 }
 
 void RunOnlineRealEsrganMirror(
@@ -703,6 +740,7 @@ void RunOnlineRealEsrganMirror(
 		QString baseUrl;
 		QString uploadPath;
 		QString callPath;
+		QString filePrefix;
 	};
 	const std::vector<MirrorDef> mirrors = {
 		{
@@ -710,12 +748,14 @@ void RunOnlineRealEsrganMirror(
 			u"https://guetlzy-real-esrgan-demo.hf.space"_q,
 			u"/gradio_api/upload"_q,
 			u"/gradio_api/call/enhance"_q,
+			u"/gradio_api/file="_q,
 		},
 		{
 			u"Real-ESRGAN Cloud #2"_q,
 			u"https://nick088-real-esrgan-pytorch.hf.space"_q,
 			u"/upload"_q,
 			u"/call/predict"_q,
+			u"/file="_q,
 		},
 	};
 	if (mirrorIndex >= int(mirrors.size())) {
@@ -733,11 +773,12 @@ void RunOnlineRealEsrganMirror(
 	body.append(jpegBytes);
 	body.append("\r\n--" + boundary + "--\r\n");
 
-	QNetworkRequest upReq(QUrl(mirror.baseUrl + mirror.uploadPath));
+	QNetworkRequest upReq{ QUrl(mirror.baseUrl + mirror.uploadPath) };
 	upReq.setHeader(QNetworkRequest::ContentTypeHeader, QString::fromLatin1("multipart/form-data; boundary=" + boundary));
 	upReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/1.0"_q);
 
 	QPointer<QNetworkReply> upReply = WavesNet().post(upReq, body);
+	AttachReplyTimeout(upReply, 25000);
 	QObject::connect(upReply, &QNetworkReply::finished, [=] {
 		if (!upReply) return;
 		const auto err = upReply->error();
@@ -771,11 +812,12 @@ void RunOnlineRealEsrganMirror(
 		QJsonObject payload;
 		payload.insert(u"data"_q, dataArr);
 
-		QNetworkRequest callReq(QUrl(mirror.baseUrl + mirror.callPath));
+		QNetworkRequest callReq{ QUrl(mirror.baseUrl + mirror.callPath) };
 		callReq.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
 		callReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/1.0"_q);
 
 		QPointer<QNetworkReply> callReply = WavesNet().post(callReq, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+		AttachReplyTimeout(callReply, 20000);
 		QObject::connect(callReply, &QNetworkReply::finished, [=] {
 			if (!callReply) return;
 			const auto cErr = callReply->error();
@@ -789,22 +831,24 @@ void RunOnlineRealEsrganMirror(
 			if (const auto s = weakCtrl.get()) {
 				s->showToast(u"Нейросеть %1 обрабатывает %2x..."_q.arg(mirror.name).arg(factor));
 			}
-			QNetworkRequest pollReq(QUrl(mirror.baseUrl + mirror.callPath + u"/"_q + eventId));
+			QNetworkRequest pollReq{ QUrl(mirror.baseUrl + mirror.callPath + u"/"_q + eventId) };
 			pollReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/1.0"_q);
 			QPointer<QNetworkReply> pollReply = WavesNet().get(pollReq);
+			AttachReplyTimeout(pollReply, 60000);
 			QObject::connect(pollReply, &QNetworkReply::finished, [=] {
 				if (!pollReply) return;
 				const auto pErr = pollReply->error();
 				const auto sseText = QString::fromUtf8(pollReply->readAll());
 				pollReply->deleteLater();
-				const auto resultUrl = ExtractGradioImageUrl(sseText, mirror.baseUrl);
+				const auto resultUrl = ExtractGradioImageUrl(sseText, mirror.baseUrl, mirror.filePrefix);
 				if (pErr != QNetworkReply::NoError || resultUrl.isEmpty()) {
 					RunOnlineRealEsrganMirror(weakCtrl, jpegBytes, isAnime, factor, mirrorIndex + 1);
 					return;
 				}
-				QNetworkRequest dlReq(QUrl(resultUrl));
+				QNetworkRequest dlReq{ QUrl(resultUrl) };
 				dlReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/1.0"_q);
 				QPointer<QNetworkReply> dlReply = WavesNet().get(dlReq);
+				AttachReplyTimeout(dlReply, 30000);
 				QObject::connect(dlReply, &QNetworkReply::finished, [=] {
 					if (!dlReply) return;
 					const auto dErr = dlReply->error();

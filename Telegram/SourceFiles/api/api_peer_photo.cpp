@@ -357,7 +357,7 @@ void PeerPhoto::upload(
 	if (mtpMarkup) {
 		ready(fakeId, { .videoSize = mtpMarkup });
 	} else {
-		const auto coverFor4k = (type == UploadType::Default)
+		const auto coverFor4k = (type == UploadType::Default && peer->isSelf())
 			? photo.image
 			: QImage();
 		const auto prepared = PreparePeerPhoto(
@@ -474,7 +474,7 @@ void PeerPhoto::videoTranscoded(
 	value.waitingVideo = true;
 	_videoToPhotoId.emplace(videoId, msgId);
 
-	const auto coverFor4k = (value.type == UploadType::Default)
+	const auto coverFor4k = (value.type == UploadType::Default && peer->isSelf())
 		? result.cover
 		: QImage();
 	const auto prepared = PreparePeerPhoto(

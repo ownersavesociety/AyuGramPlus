@@ -180,7 +180,7 @@ jobs:
         run: |
           OPT_FILE="$TBUILD/$REPO_NAME/cmake/options_win.cmake"
           if [ -f "$OPT_FILE" ]; then
-            sed -i 's|/GL||g; s|/LTCG||g' "$OPT_FILE" || true
+            sed -i 's|/GL||g; s|/LTCG[^ "]*||g' "$OPT_FILE" || true
           fi
 
       - name: Configure and Build MediaTok.exe

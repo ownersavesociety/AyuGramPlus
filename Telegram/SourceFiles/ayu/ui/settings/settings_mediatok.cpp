@@ -68,23 +68,28 @@ void BuildGeminiSection(SectionBuilder &builder) {
 		.title = rpl::single(u"Модель Gemini"_q),
 		.icon = { &st::menuIconEdit },
 		.label = settings->geminiModelValue() | rpl::map([](const QString &m) {
-			return m.trimmed().isEmpty() ? u"gemini-4-hydrogen"_q : m;
+			const auto clean = m.trimmed();
+			return (clean.isEmpty() || clean.compare(u"gemini-4-hydrogen"_q, Qt::CaseInsensitive) == 0)
+				? u"gemini-2.5-flash"_q
+				: clean;
 		}),
 		.onClick = [=] {
 			if (!controller) {
 				return;
 			}
 			const auto models = std::vector<QString>{
-				u"gemini-4-hydrogen"_q,
-				u"gemini-4-carbon"_q,
-				u"gemini-3.1-pro-preview"_q,
-				u"gemini-2.5-pro"_q,
-				u"gemini-3-flash-preview"_q,
 				u"gemini-2.5-flash"_q,
+				u"gemini-2.5-pro"_q,
+				u"gemini-2.5-flash-lite"_q,
+				u"gemini-3-flash-preview"_q,
+				u"gemini-3.1-pro-preview"_q,
 				u"Ввести вручную..."_q,
 			};
 			const int presetCount = int(models.size()) - 1;
-			const auto current = AyuSettings::getInstance().geminiModel().trimmed();
+			auto current = AyuSettings::getInstance().geminiModel().trimmed();
+			if (current.compare(u"gemini-4-hydrogen"_q, Qt::CaseInsensitive) == 0) {
+				current = u"gemini-2.5-flash"_q;
+			}
 			int initialIndex = 0;
 			bool matched = false;
 			for (int i = 0; i < presetCount; ++i) {
@@ -110,12 +115,12 @@ void BuildGeminiSection(SectionBuilder &builder) {
 							strong->show(Box<EditMarkBox>(
 								rpl::single(u"Модель Gemini (id)"_q),
 								AyuSettings::getInstance().geminiModel(),
-								u"gemini-4-hydrogen"_q,
+								u"gemini-2.5-flash"_q,
 								[=](const QString &value) {
 									const auto trimmed = value.trimmed();
 									AyuSettings::getInstance().setGeminiModel(
 										trimmed.isEmpty()
-											? u"gemini-4-hydrogen"_q
+											? u"gemini-2.5-flash"_q
 											: trimmed);
 								}));
 						}

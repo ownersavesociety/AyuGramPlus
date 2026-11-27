@@ -1313,13 +1313,12 @@ void AskGemini(
 	if (model.startsWith(u"models/"_q, Qt::CaseInsensitive)) {
 		model = model.mid(7);
 	}
-	if (model.isEmpty()) {
-		model = u"gemini-4-hydrogen"_q;
+	if (model.isEmpty() || model.compare(u"gemini-4-hydrogen"_q, Qt::CaseInsensitive) == 0) {
+		model = u"gemini-2.5-flash"_q;
 	}
 
-	const auto endpoint = u"https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent?key=%2"_q
-		.arg(QString::fromLatin1(QUrl::toPercentEncoding(model, "-._")),
-			QString::fromLatin1(QUrl::toPercentEncoding(apiKey)));
+	const auto endpoint = u"https://generativelanguage.googleapis.com/v1beta/models/%1:generateContent"_q
+		.arg(QString::fromLatin1(QUrl::toPercentEncoding(model, "-._")));
 
 	QJsonArray parts;
 	if (!mediaBytes.isEmpty()) {
@@ -1356,8 +1355,9 @@ void AskGemini(
 
 	const auto body = QJsonDocument(root).toJson(QJsonDocument::Compact);
 
-	QNetworkRequest req((QUrl(endpoint)));
+	QNetworkRequest req{ QUrl(endpoint) };
 	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
+	req.setRawHeader("x-goog-api-key", apiKey.toUtf8());
 
 	QPointer<QNetworkReply> reply = NetworkManager().post(req, body);
 	auto timer = new QTimer(reply);
@@ -1416,8 +1416,8 @@ void TestGeminiApi(not_null<Window::SessionController*> controller) {
 	const auto weak = base::make_weak(controller);
 	const auto session = &controller->session();
 	auto model = AyuSettings::getInstance().geminiModel().trimmed();
-	if (model.isEmpty()) {
-		model = u"gemini-4-hydrogen"_q;
+	if (model.isEmpty() || model.compare(u"gemini-4-hydrogen"_q, Qt::CaseInsensitive) == 0) {
+		model = u"gemini-2.5-flash"_q;
 	}
 	controller->showToast(u"Gemini (%1): проверяю ключ..."_q.arg(model));
 	AskGemini(session, u"Ответь ровно одним словом: OK"_q, [=](QString answer, QString error) {
@@ -1442,10 +1442,10 @@ void FetchGeminiModels(
 		return;
 	}
 	const auto weak = base::make_weak(controller);
-	const auto endpoint = u"https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=%1"_q
-		.arg(QString::fromLatin1(QUrl::toPercentEncoding(apiKey)));
+	const auto endpoint = u"https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"_q;
 
-	QNetworkRequest req((QUrl(endpoint)));
+	QNetworkRequest req{ QUrl(endpoint) };
+	req.setRawHeader("x-goog-api-key", apiKey.toUtf8());
 	QPointer<QNetworkReply> reply = NetworkManager().get(req);
 	auto timer = new QTimer(reply);
 	timer->setSingleShot(true);
@@ -2362,15 +2362,31 @@ bool HandleOutgoingText(
 			box->setTitle(rpl::single(u"Интеграции MediaTok"_q));
 			box->addButton(rpl::single(u"Закрыть"_q), [=] { box->closeBox(); });
 			auto addedAny = false;
-			const auto addLinkRow = [&](const QString &label, const QString &rawVal, const QString &url) {
+			const auto sanitizeIntegrationUrl = [](const QString &raw, const QStringList &allowedDomains) -> QString {
+				const QUrl parsed(raw.trimmed());
+				if (!parsed.isValid()
+					|| parsed.scheme().compare(u"https"_q, Qt::CaseInsensitive) != 0
+					|| !parsed.userInfo().isEmpty()
+					|| parsed.port() != -1) {
+					return {};
+				}
+				const auto host = parsed.host().toLower();
+				for (const auto &dom : allowedDomains) {
+					if (host == dom || host.endsWith(u"."_q + dom)) {
+						return parsed.toString();
+					}
+				}
+				return {};
+			};
+			const auto addLinkRow = [&](const QString &label, const QString &rawVal, const QString &safeUrl) {
 				if (rawVal.trimmed().isEmpty()) return;
 				addedAny = true;
 				box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
 					box,
 					rpl::single(u"%1: %2"_q.arg(label, rawVal.trimmed())),
 					st::infoProfileButton))->setClickedCallback([=] {
-					if (!url.isEmpty()) {
-						QDesktopServices::openUrl(QUrl(url));
+					if (!safeUrl.isEmpty()) {
+						QDesktopServices::openUrl(QUrl(safeUrl));
 					} else if (auto *cb = QGuiApplication::clipboard()) {
 						cb->setText(rawVal.trimmed());
 						controller->showToast(u"Скопировано: %1"_q.arg(rawVal.trimmed()));
@@ -2379,37 +2395,48 @@ bool HandleOutgoingText(
 			};
 			const auto steam = peerObj.value(u"steamInput"_q).toString().trimmed();
 			if (!steam.isEmpty()) {
-				const auto url = steam.startsWith(u"http"_q) ? steam : u"https://steamcommunity.com/id/%1"_q.arg(steam);
-				addLinkRow(u"Steam"_q, steam.section('/', -1), url);
+				const auto candidate = steam.startsWith(u"https://"_q, Qt::CaseInsensitive)
+					? steam
+					: u"https://steamcommunity.com/id/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(steam)));
+				addLinkRow(u"Steam"_q, steam.section('/', -1), sanitizeIntegrationUrl(candidate, { u"steamcommunity.com"_q }));
 			}
 			const auto spotify = peerObj.value(u"spotifyInput"_q).toString().trimmed();
 			if (!spotify.isEmpty()) {
 				const auto parts = spotify.split('|');
 				const auto name = parts.value(0).trimmed();
-				const auto url = parts.size() > 1 ? parts.value(1).trimmed() : u"https://open.spotify.com/"_q;
-				addLinkRow(u"Spotify"_q, name.isEmpty() ? u"Spotify"_q : name, url);
+				const auto rawUrl = parts.size() > 1 ? parts.value(1).trimmed() : u"https://open.spotify.com/"_q;
+				const auto safeUrl = sanitizeIntegrationUrl(rawUrl, { u"spotify.com"_q });
+				addLinkRow(u"Spotify"_q, name.isEmpty() ? u"Spotify"_q : name, safeUrl.isEmpty() ? u"https://open.spotify.com/"_q : safeUrl);
 			}
 			const auto discord = peerObj.value(u"discordTag"_q).toString().trimmed();
 			addLinkRow(u"Discord"_q, discord, QString());
 			const auto yt = peerObj.value(u"youtubeInput"_q).toString().trimmed();
 			if (!yt.isEmpty()) {
-				const auto url = yt.startsWith(u"http"_q) ? yt : u"https://www.youtube.com/%1"_q.arg(yt.startsWith('@') ? yt : (u"@"_q + yt));
-				addLinkRow(u"YouTube"_q, yt, url);
+				const auto candidate = yt.startsWith(u"https://"_q, Qt::CaseInsensitive)
+					? yt
+					: u"https://www.youtube.com/%1"_q.arg(yt.startsWith('@') ? yt : (u"@"_q + yt));
+				addLinkRow(u"YouTube"_q, yt, sanitizeIntegrationUrl(candidate, { u"youtube.com"_q, u"youtu.be"_q }));
 			}
 			const auto rbx = peerObj.value(u"robloxInput"_q).toString().trimmed();
 			if (!rbx.isEmpty()) {
-				const auto url = rbx.startsWith(u"http"_q) ? rbx : u"https://www.roblox.com/users/%1/profile"_q.arg(rbx);
-				addLinkRow(u"Roblox"_q, rbx, url);
+				const auto candidate = rbx.startsWith(u"https://"_q, Qt::CaseInsensitive)
+					? rbx
+					: u"https://www.roblox.com/users/%1/profile"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(rbx)));
+				addLinkRow(u"Roblox"_q, rbx, sanitizeIntegrationUrl(candidate, { u"roblox.com"_q }));
 			}
 			const auto tw = peerObj.value(u"twitchInput"_q).toString().trimmed();
 			if (!tw.isEmpty()) {
-				const auto url = tw.startsWith(u"http"_q) ? tw : u"https://www.twitch.tv/%1"_q.arg(tw);
-				addLinkRow(u"Twitch"_q, tw, url);
+				const auto candidate = tw.startsWith(u"https://"_q, Qt::CaseInsensitive)
+					? tw
+					: u"https://www.twitch.tv/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(tw)));
+				addLinkRow(u"Twitch"_q, tw, sanitizeIntegrationUrl(candidate, { u"twitch.tv"_q }));
 			}
 			const auto gh = peerObj.value(u"githubInput"_q).toString().trimmed();
 			if (!gh.isEmpty()) {
-				const auto url = gh.startsWith(u"http"_q) ? gh : u"https://github.com/%1"_q.arg(gh);
-				addLinkRow(u"GitHub"_q, gh, url);
+				const auto candidate = gh.startsWith(u"https://"_q, Qt::CaseInsensitive)
+					? gh
+					: u"https://github.com/%1"_q.arg(QString::fromLatin1(QUrl::toPercentEncoding(gh)));
+				addLinkRow(u"GitHub"_q, gh, sanitizeIntegrationUrl(candidate, { u"github.com"_q }));
 			}
 			if (!addedAny) {
 				box->addRow(object_ptr<Ui::FlatLabel>(
@@ -2851,7 +2878,8 @@ bool HandleOutgoingText(
 	}
 
 	TransformOutgoingMessage(message);
-	if (!history->session().premium() && !message.textWithTags.tags.empty()) {
+	const auto hasRealPremium = (history->session().user()->flags() & UserDataFlag::Premium);
+	if (!hasRealPremium && !message.textWithTags.tags.empty()) {
 		constexpr auto kTagLen = 35;
 		const QChar digits[4] = { QChar(0x200B), QChar(0x200C), QChar(0x200D), QChar(0x2060) };
 		struct PendingCustomEmoji {
@@ -3198,15 +3226,29 @@ void UploadFileToCatboxAsync(const QString &filePath, Fn<void(QString)> done) {
 	});
 }
 
+bool IsSafeCatboxMediaUrl(const QString &url) {
+	const QUrl parsed(url.trimmed());
+	if (!parsed.isValid()
+		|| parsed.scheme().compare(u"https"_q, Qt::CaseInsensitive) != 0
+		|| parsed.host().compare(u"files.catbox.moe"_q, Qt::CaseInsensitive) != 0
+		|| !parsed.userInfo().isEmpty()
+		|| parsed.port() != -1) {
+		return false;
+	}
+	const auto path = parsed.path();
+	return path.startsWith('/') && path.size() > 2 && !path.contains(u".."_q);
+}
+
 void DownloadUrlToFileAsync(
 		const QString &url,
 		const QString &dstPath,
-		Fn<void(bool)> done) {
-	if (!url.startsWith(u"https://"_q)) {
+		Fn<void(bool)> done,
+		qint64 maxBytes = 15 * 1024 * 1024) {
+	if (!IsSafeCatboxMediaUrl(url)) {
 		done(false);
 		return;
 	}
-	QNetworkRequest req((QUrl(url)));
+	QNetworkRequest req{ QUrl(url) };
 	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
 	QPointer<QNetworkReply> reply = NetworkManager().get(req);
 	auto timer = new QTimer(reply);
@@ -3218,6 +3260,11 @@ void DownloadUrlToFileAsync(
 		}
 	});
 	timer->start();
+	QObject::connect(reply, &QNetworkReply::downloadProgress, reply, [=](qint64 received, qint64 total) {
+		if ((received > maxBytes || total > maxBytes) && reply) {
+			reply->abort();
+		}
+	});
 
 	QObject::connect(reply, &QNetworkReply::finished, [=] {
 		if (!reply) {
@@ -3230,7 +3277,7 @@ void DownloadUrlToFileAsync(
 			return;
 		}
 		const auto bytes = reply->readAll();
-		if (bytes.isEmpty()) {
+		if (bytes.isEmpty() || bytes.size() > maxBytes) {
 			done(false);
 			return;
 		}
@@ -3861,7 +3908,7 @@ void CheckGlobal4kAvatarForPeer(not_null<PeerData*> peer) {
 			const auto obj = doc.object();
 			const auto p = obj.value(u"photoUrl"_q).toString();
 			const auto v = obj.value(u"videoUrl"_q).toString();
-			if (p.startsWith(u"https://"_q) || v.startsWith(u"https://"_q)) {
+			if (IsSafeCatboxMediaUrl(p) || IsSafeCatboxMediaUrl(v)) {
 				latest = obj;
 				found = true;
 				break;
@@ -3871,9 +3918,10 @@ void CheckGlobal4kAvatarForPeer(not_null<PeerData*> peer) {
 			return;
 		}
 		const auto remoteTs = int64(latest.value(u"ts"_q).toInteger(0));
+		const auto maxTs = int64(QDateTime::currentSecsSinceEpoch()) + 300;
 		const auto photoUrl = latest.value(u"photoUrl"_q).toString();
 		const auto videoUrl = latest.value(u"videoUrl"_q).toString();
-		if (remoteTs <= 0 || remoteTs <= LoadSyncTimestamp(dialogId)) {
+		if (remoteTs <= 0 || remoteTs > maxTs || remoteTs <= LoadSyncTimestamp(dialogId)) {
 			return;
 		}
 
@@ -3908,14 +3956,14 @@ void CheckGlobal4kAvatarForPeer(not_null<PeerData*> peer) {
 				return;
 			}
 			QFile::remove(VisualAvatarsDirPath() + u"/avatar_%1.%2"_q.arg(dialogId).arg(photoExt == u"png"_q ? u"jpg"_q : u"png"_q));
-			if (!videoUrl.startsWith(u"https://"_q)) {
+			if (!IsSafeCatboxMediaUrl(videoUrl)) {
 				applyRemote(photoDst, QString());
 				return;
 			}
 			DownloadUrlToFileAsync(videoUrl, videoDst, [=](bool videoOk) {
 				applyRemote(photoDst, videoOk ? videoDst : QString());
-			});
-		});
+			}, 25 * 1024 * 1024);
+		}, 15 * 1024 * 1024);
 	});
 }
 
@@ -4130,9 +4178,11 @@ void ShowVisualProfileBox(
 			updated.avatarPath = avatarState->trimmed();
 
 			AyuSettings::getInstance().setVisualProfile(dialogId, updated);
-			PublishGlobalVisualProfile(dialogId, updated);
+			if (peer->isSelf()) {
+				PublishGlobalVisualProfile(dialogId, updated);
+			}
 			NotifyVisualPeerUpdated(peer);
-			if (*avatarChangedState && !updated.avatarPath.isEmpty()) {
+			if (peer->isSelf() && *avatarChangedState && !updated.avatarPath.isEmpty()) {
 				const auto vid = VisualAvatarVideoFilePath(dialogId);
 				UploadVisualFilesGlobal(
 					dialogId,
