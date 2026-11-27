@@ -1803,12 +1803,28 @@ void PublishMergedProfileToCloudAsync(
 		SignSyncPayloadV2(dialogId, payload);
 		SaveRemoteSyncProfileCache(dialogId, payload);
 
-		QNetworkRequest req(QUrl(u"https://ntfy.sh/mtprof_v1_%1"_q.arg(dialogId)));
+		const auto jsonBytes = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+		const auto ntfyUrl = QUrl(u"https://ntfy.sh/mtprof_v1_%1"_q.arg(dialogId));
+		QNetworkRequest req(ntfyUrl);
 		req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
 		req.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(userAgent));
-		QPointer<QNetworkReply> postReply = WavesNet().post(req, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+		QPointer<QNetworkReply> postReply = WavesNet().post(req, jsonBytes);
 		QObject::connect(postReply, &QNetworkReply::finished, [=] {
-			if (postReply) postReply->deleteLater();
+			if (!postReply) return;
+			const int status = postReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+			postReply->deleteLater();
+			if (status == 429 || status == 502 || status == 503 || status == 504) {
+				const int delayMs = (status == 429) ? 20000 : 5000;
+				QTimer::singleShot(delayMs, [=] {
+					QNetworkRequest retryReq(ntfyUrl);
+					retryReq.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
+					retryReq.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(userAgent));
+					QPointer<QNetworkReply> retryReply = WavesNet().post(retryReq, jsonBytes);
+					QObject::connect(retryReply, &QNetworkReply::finished, [=] {
+						if (retryReply) retryReply->deleteLater();
+					});
+				});
+			}
 		});
 	};
 

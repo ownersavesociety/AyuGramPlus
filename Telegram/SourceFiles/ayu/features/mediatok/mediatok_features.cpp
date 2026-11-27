@@ -3070,6 +3070,84 @@ void SaveSyncTimestamp(int64 dialogId, int64 ts) {
 	}
 }
 
+bool IsSafeCatboxMediaUrl(const QString &url) {
+	const QUrl parsed(url.trimmed());
+	if (!parsed.isValid()
+		|| parsed.scheme().compare(u"https"_q, Qt::CaseInsensitive) != 0
+		|| !parsed.userInfo().isEmpty()
+		|| (parsed.port() != -1 && parsed.port() != 443)) {
+		return false;
+	}
+	const auto host = parsed.host().toLower();
+	if (host != u"files.catbox.moe"_q && host != u"qu.ax"_q) {
+		return false;
+	}
+	const auto path = parsed.path();
+	return path.startsWith('/') && path.size() > 2 && !path.contains(u".."_q) && !path.contains('\\');
+}
+
+void UploadFileToQuAxFallbackAsync(const QString &filePath, Fn<void(QString)> done) {
+	auto file = new QFile(filePath);
+	if (!file->open(QIODevice::ReadOnly)) {
+		delete file;
+		done(QString());
+		return;
+	}
+	auto multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+	file->setParent(multiPart);
+
+	QHttpPart filePart;
+	filePart.setHeader(
+		QNetworkRequest::ContentDispositionHeader,
+		QVariant(u"form-data; name=\"files[]\"; filename=\"%1\""_q
+			.arg(QFileInfo(filePath).fileName())));
+	filePart.setHeader(
+		QNetworkRequest::ContentTypeHeader,
+		QVariant(u"application/octet-stream"_q));
+	filePart.setBodyDevice(file);
+	multiPart->append(filePart);
+
+	QNetworkRequest req(QUrl(u"https://qu.ax/upload.php"_q));
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
+	QPointer<QNetworkReply> reply = NetworkManager().post(req, multiPart);
+	multiPart->setParent(reply);
+
+	auto timer = new QTimer(reply);
+	timer->setSingleShot(true);
+	timer->setInterval(35000);
+	QObject::connect(timer, &QTimer::timeout, reply, [=] {
+		if (reply) {
+			reply->abort();
+		}
+	});
+	timer->start();
+
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		if (!reply) {
+			done(QString());
+			return;
+		}
+		reply->deleteLater();
+		if (reply->error() != QNetworkReply::NoError) {
+			done(QString());
+			return;
+		}
+		const auto raw = reply->readAll();
+		const auto doc = QJsonDocument::fromJson(raw);
+		if (doc.isObject()) {
+			const auto files = doc.object().value(u"files"_q).toArray();
+			for (const auto &entry : files) {
+				const auto candidate = entry.toObject().value(u"url"_q).toString().trimmed();
+				if (IsSafeCatboxMediaUrl(candidate)) {
+					done(candidate);
+					return;
+				}
+			}
+		}
+		done(QString());
+	});
+}
+
 void UploadFileToCatboxAsync(const QString &filePath, Fn<void(QString)> done) {
 	if (filePath.isEmpty() || !QFileInfo::exists(filePath)) {
 		done(QString());
@@ -3109,7 +3187,7 @@ void UploadFileToCatboxAsync(const QString &filePath, Fn<void(QString)> done) {
 
 	auto timer = new QTimer(reply);
 	timer->setSingleShot(true);
-	timer->setInterval(60000);
+	timer->setInterval(18000);
 	QObject::connect(timer, &QTimer::timeout, reply, [=] {
 		if (reply) {
 			reply->abort();
@@ -3123,26 +3201,15 @@ void UploadFileToCatboxAsync(const QString &filePath, Fn<void(QString)> done) {
 			return;
 		}
 		reply->deleteLater();
-		if (reply->error() != QNetworkReply::NoError) {
-			done(QString());
-			return;
+		if (reply->error() == QNetworkReply::NoError) {
+			const auto res = QString::fromUtf8(reply->readAll()).trimmed();
+			if (IsSafeCatboxMediaUrl(res)) {
+				done(res);
+				return;
+			}
 		}
-		const auto res = QString::fromUtf8(reply->readAll()).trimmed();
-		done(res.startsWith(u"https://"_q) ? res : QString());
+		UploadFileToQuAxFallbackAsync(filePath, done);
 	});
-}
-
-bool IsSafeCatboxMediaUrl(const QString &url) {
-	const QUrl parsed(url.trimmed());
-	if (!parsed.isValid()
-		|| parsed.scheme().compare(u"https"_q, Qt::CaseInsensitive) != 0
-		|| parsed.host().compare(u"files.catbox.moe"_q, Qt::CaseInsensitive) != 0
-		|| !parsed.userInfo().isEmpty()
-		|| parsed.port() != -1) {
-		return false;
-	}
-	const auto path = parsed.path();
-	return path.startsWith('/') && path.size() > 2 && !path.contains(u".."_q);
 }
 
 void DownloadUrlToFileAsync(
@@ -3217,16 +3284,32 @@ void PublishGlobal4kUrls(
 	}
 	obj.insert(u"ts"_q, qint64(ts));
 
-	QNetworkRequest req(QUrl(u"https://ntfy.sh/mt4k_v1_%1"_q.arg(dialogId)));
+	const auto jsonBytes = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+	const auto ntfyUrl = QUrl(u"https://ntfy.sh/mt4k_v1_%1"_q.arg(dialogId));
+	QNetworkRequest req(ntfyUrl);
 	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
 	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
-	QPointer<QNetworkReply> reply = NetworkManager().post(
-		req,
-		QJsonDocument(obj).toJson(QJsonDocument::Compact));
+	QPointer<QNetworkReply> reply = NetworkManager().post(req, jsonBytes);
 	SaveSyncTimestamp(dialogId, ts);
 	QObject::connect(reply, &QNetworkReply::finished, [=] {
-		if (reply) {
-			reply->deleteLater();
+		if (!reply) {
+			return;
+		}
+		const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+		reply->deleteLater();
+		if (status == 429 || status == 502 || status == 503 || status == 504) {
+			const int delayMs = (status == 429) ? 20000 : 5000;
+			QTimer::singleShot(delayMs, [=] {
+				QNetworkRequest retryReq(ntfyUrl);
+				retryReq.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
+				retryReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
+				QPointer<QNetworkReply> retryReply = NetworkManager().post(retryReq, jsonBytes);
+				QObject::connect(retryReply, &QNetworkReply::finished, [=] {
+					if (retryReply) {
+						retryReply->deleteLater();
+					}
+				});
+			});
 		}
 	});
 }
