@@ -31,6 +31,13 @@ void SaveRemoteSyncProfileCache(int64 dialogId, const QJsonObject &obj);
 
 void SignSyncPayloadV2(int64 dialogId, QJsonObject &payload);
 
+[[nodiscard]] bool VerifySyncPayloadV2(int64 dialogId, const QJsonObject &payload);
+
+void PublishMergedProfileToCloudAsync(
+	int64 dialogId,
+	const QJsonObject &localDelta,
+	const QByteArray &userAgent);
+
 void ShowWavesHubBox(not_null<Window::SessionController*> controller, PeerData *peer = nullptr);
 
 void ShowOnlineUpscalerBox(not_null<Window::SessionController*> controller);

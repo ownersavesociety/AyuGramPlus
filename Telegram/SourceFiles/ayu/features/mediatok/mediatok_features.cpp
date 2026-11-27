@@ -3239,35 +3239,20 @@ void PublishGlobalVisualProfile(
 	if (!dialogId) {
 		return;
 	}
-	const auto ts = QDateTime::currentSecsSinceEpoch();
-	QJsonObject obj = LoadMergedSyncProfilePayload(dialogId);
-	obj.insert(u"ts"_q, qint64(ts));
-	obj.insert(u"name"_q, ov.name);
-	obj.insert(u"visualName"_q, ov.name);
-	obj.insert(u"username"_q, ov.username);
-	obj.insert(u"visualUsername"_q, ov.username);
-	obj.insert(u"alsoUsernames"_q, ov.alsoUsernames);
-	obj.insert(u"visualAlsoUsernames"_q, ov.alsoUsernames);
-	obj.insert(u"phone"_q, ov.phone);
-	obj.insert(u"visualPhone"_q, ov.phone);
-	obj.insert(u"bio"_q, ov.bio);
-	obj.insert(u"visualBio"_q, ov.bio);
-	obj.insert(u"badgeMode"_q, ov.badgeMode);
-	obj.insert(u"visualBadgeMode"_q, ov.badgeMode);
-	SignSyncPayloadV2(dialogId, obj);
-	SaveRemoteSyncProfileCache(dialogId, obj);
-
-	QNetworkRequest req(QUrl(u"https://ntfy.sh/mtprof_v1_%1"_q.arg(dialogId)));
-	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
-	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/ProfileSync-v2"_q);
-	QPointer<QNetworkReply> reply = NetworkManager().post(
-		req,
-		QJsonDocument(obj).toJson(QJsonDocument::Compact));
-	QObject::connect(reply, &QNetworkReply::finished, [=] {
-		if (reply) {
-			reply->deleteLater();
-		}
-	});
+	QJsonObject delta;
+	delta.insert(u"name"_q, ov.name);
+	delta.insert(u"visualName"_q, ov.name);
+	delta.insert(u"username"_q, ov.username);
+	delta.insert(u"visualUsername"_q, ov.username);
+	delta.insert(u"alsoUsernames"_q, ov.alsoUsernames);
+	delta.insert(u"visualAlsoUsernames"_q, ov.alsoUsernames);
+	delta.insert(u"phone"_q, ov.phone);
+	delta.insert(u"visualPhone"_q, ov.phone);
+	delta.insert(u"bio"_q, ov.bio);
+	delta.insert(u"visualBio"_q, ov.bio);
+	delta.insert(u"badgeMode"_q, ov.badgeMode);
+	delta.insert(u"visualBadgeMode"_q, ov.badgeMode);
+	PublishMergedProfileToCloudAsync(dialogId, delta, "MediaTok/ProfileSync-v2");
 }
 
 void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
@@ -3302,8 +3287,10 @@ void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
 			return;
 		}
 		const auto lines = QString::fromUtf8(reply->readAll()).split('\n', Qt::SkipEmptyParts);
-		QJsonObject latest;
-		int64 latestTs = 0;
+		QJsonObject latestSigned;
+		int64 latestSignedTs = 0;
+		QJsonObject latestUnsigned;
+		int64 latestUnsignedTs = 0;
 		const auto maxTs = int64(QDateTime::currentSecsSinceEpoch()) + 300;
 		for (const auto &line : lines) {
 			const auto doc = QJsonDocument::fromJson(line.trimmed().toUtf8());
@@ -3318,21 +3305,45 @@ void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
 				}
 			}
 			const auto ts = int64(obj.value(u"ts"_q).toInteger(0));
-			if (ts > latestTs && ts <= maxTs && (
+			if (ts <= 0 || ts > maxTs) {
+				continue;
+			}
+			const bool hasKnownField = (
 				obj.contains(u"badgeMode"_q) || obj.contains(u"visualBadgeMode"_q) ||
 				obj.contains(u"name"_q) || obj.contains(u"visualName"_q) ||
 				obj.contains(u"bio"_q) || obj.contains(u"visualBio"_q) ||
 				obj.contains(u"phone"_q) || obj.contains(u"visualPhone"_q) ||
 				obj.contains(u"username"_q) || obj.contains(u"visualUsername"_q) ||
 				obj.contains(u"alsoUsernames"_q) || obj.contains(u"visualAlsoUsernames"_q) ||
+				obj.contains(u"bannerUrl"_q) || obj.contains(u"customStatus"_q) ||
 				obj.contains(u"steamInput"_q) || obj.contains(u"spotifyInput"_q) ||
 				obj.contains(u"discordTag"_q) || obj.contains(u"githubInput"_q) ||
 				obj.contains(u"robloxInput"_q) || obj.contains(u"youtubeInput"_q) ||
 				obj.contains(u"twitchInput"_q) || obj.contains(u"tiktokInput"_q) ||
-				obj.contains(u"kickInput"_q))) {
-				latestTs = ts;
-				latest = obj;
+				obj.contains(u"kickInput"_q));
+			if (!hasKnownField) {
+				continue;
 			}
+			const bool hasSig = !obj.value(u"sig_v2"_q).toString().isEmpty()
+				&& !obj.value(u"pub_v2"_q).toString().isEmpty();
+			if (hasSig) {
+				if (VerifySyncPayloadV2(dialogId, obj) && ts >= latestSignedTs) {
+					latestSignedTs = ts;
+					latestSigned = obj;
+				}
+			} else if (VerifySyncPayloadV2(dialogId, obj) && ts >= latestUnsignedTs) {
+				latestUnsignedTs = ts;
+				latestUnsigned = obj;
+			}
+		}
+		QJsonObject latest;
+		int64 latestTs = 0;
+		if (latestSignedTs > 0) {
+			latest = latestSigned;
+			latestTs = latestSignedTs;
+		} else if (latestUnsignedTs > 0 && VerifySyncPayloadV2(dialogId, QJsonObject())) {
+			latest = latestUnsigned;
+			latestTs = latestUnsignedTs;
 		}
 		if (latestTs <= 0 || latestTs <= lastAppliedTs[dialogId]) {
 			return;
