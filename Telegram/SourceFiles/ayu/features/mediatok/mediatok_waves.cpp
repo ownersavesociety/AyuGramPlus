@@ -66,6 +66,8 @@
 #include <set>
 #include <unordered_set>
 
+#include <openssl/evp.h>
+
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <tlhelp32.h>
@@ -85,6 +87,14 @@ QString WavesConfigPath() {
 
 QString IntegrationsPath() {
 	return cWorkingDir() + u"tdata/mediatok_integrations.json"_q;
+}
+
+QString RemoteSyncCachePath() {
+	return cWorkingDir() + u"tdata/mediatok_remote_profile_cache.json"_q;
+}
+
+QString SyncKeysPath() {
+	return cWorkingDir() + u"tdata/mediatok_sync_v2_keys.json"_q;
 }
 
 QJsonObject LoadJsonFile(const QString &path) {
@@ -215,35 +225,30 @@ void PublishIntegrationToCloud(int64 dialogId, const QJsonObject &peerInt) {
 	if (!dialogId) {
 		return;
 	}
-	QJsonObject payload = peerInt;
+	QJsonObject payload = LoadMergedSyncProfilePayload(dialogId);
+	for (auto it = peerInt.begin(); it != peerInt.end(); ++it) {
+		payload.insert(it.key(), it.value());
+	}
 	if (const auto ov = AyuSettings::getInstance().visualProfilePtr(dialogId)) {
-		if (!ov->name.isEmpty()) {
-			payload.insert(u"name"_q, ov->name);
-			payload.insert(u"visualName"_q, ov->name);
-		}
-		if (!ov->username.isEmpty()) {
-			payload.insert(u"username"_q, ov->username);
-			payload.insert(u"visualUsername"_q, ov->username);
-		}
-		if (!ov->alsoUsernames.isEmpty()) {
-			payload.insert(u"alsoUsernames"_q, ov->alsoUsernames);
-			payload.insert(u"visualAlsoUsernames"_q, ov->alsoUsernames);
-		}
-		if (!ov->phone.isEmpty()) {
-			payload.insert(u"phone"_q, ov->phone);
-			payload.insert(u"visualPhone"_q, ov->phone);
-		}
-		if (!ov->bio.isEmpty()) {
-			payload.insert(u"bio"_q, ov->bio);
-			payload.insert(u"visualBio"_q, ov->bio);
-		}
+		payload.insert(u"name"_q, ov->name);
+		payload.insert(u"visualName"_q, ov->name);
+		payload.insert(u"username"_q, ov->username);
+		payload.insert(u"visualUsername"_q, ov->username);
+		payload.insert(u"alsoUsernames"_q, ov->alsoUsernames);
+		payload.insert(u"visualAlsoUsernames"_q, ov->alsoUsernames);
+		payload.insert(u"phone"_q, ov->phone);
+		payload.insert(u"visualPhone"_q, ov->phone);
+		payload.insert(u"bio"_q, ov->bio);
+		payload.insert(u"visualBio"_q, ov->bio);
 		payload.insert(u"badgeMode"_q, ov->badgeMode);
 		payload.insert(u"visualBadgeMode"_q, ov->badgeMode);
 	}
 	payload.insert(u"ts"_q, qint64(QDateTime::currentSecsSinceEpoch()));
+	SignSyncPayloadV2(dialogId, payload);
+	SaveRemoteSyncProfileCache(dialogId, payload);
 	QNetworkRequest req(QUrl(u"https://ntfy.sh/mtprof_v1_%1"_q.arg(dialogId)));
 	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
-	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/WinIntegrations"_q);
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/WinIntegrations-v2"_q);
 	QPointer<QNetworkReply> reply = WavesNet().post(req, QJsonDocument(payload).toJson(QJsonDocument::Compact));
 	QObject::connect(reply, &QNetworkReply::finished, [=] {
 		if (reply) {
@@ -1597,8 +1602,112 @@ void ShowCommandPaletteBox(not_null<Window::SessionController*> controller, Peer
 	}));
 }
 
+QJsonObject LoadMergedSyncProfilePayload(int64 dialogId) {
+	if (!dialogId) return {};
+	auto allCache = LoadJsonFile(RemoteSyncCachePath());
+	auto merged = allCache.value(QString::number(dialogId)).toObject();
+	merged.remove(u"sig_v2"_q);
+	merged.remove(u"pub_v2"_q);
+	const auto allInt = LoadJsonFile(IntegrationsPath());
+	const auto pInt = allInt.value(QString::number(dialogId)).toObject();
+	for (auto it = pInt.begin(); it != pInt.end(); ++it) {
+		merged.insert(it.key(), it.value());
+	}
+	return merged;
+}
+
+void SaveRemoteSyncProfileCache(int64 dialogId, const QJsonObject &obj) {
+	if (!dialogId) return;
+	auto allCache = LoadJsonFile(RemoteSyncCachePath());
+	auto cleaned = obj;
+	cleaned.remove(u"sig_v2"_q);
+	cleaned.remove(u"pub_v2"_q);
+	allCache.insert(QString::number(dialogId), cleaned);
+	SaveJsonFile(RemoteSyncCachePath(), allCache);
+}
+
+void SignSyncPayloadV2(int64 dialogId, QJsonObject &payload) {
+	if (!dialogId) return;
+	payload.remove(u"sig_v2"_q);
+	payload.remove(u"pub_v2"_q);
+
+	auto keysRoot = LoadJsonFile(SyncKeysPath());
+	const auto keyId = QString::number(dialogId);
+	QByteArray privRaw;
+	QByteArray pubRaw;
+	if (keysRoot.contains(keyId)) {
+		const auto kObj = keysRoot.value(keyId).toObject();
+		privRaw = QByteArray::fromBase64(kObj.value(u"priv"_q).toString().toLatin1());
+		pubRaw = QByteArray::fromBase64(kObj.value(u"pub"_q).toString().toLatin1());
+	}
+
+	EVP_PKEY *pkey = nullptr;
+	if (privRaw.size() == 32 && pubRaw.size() == 32) {
+		pkey = EVP_PKEY_new_raw_private_key(
+			EVP_PKEY_ED25519,
+			nullptr,
+			reinterpret_cast<const unsigned char*>(privRaw.constData()),
+			32);
+	}
+	if (!pkey) {
+		EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+		if (pctx) {
+			if (EVP_PKEY_keygen_init(pctx) == 1) {
+				EVP_PKEY_keygen(pctx, &pkey);
+			}
+			EVP_PKEY_CTX_free(pctx);
+		}
+		if (pkey) {
+			size_t privLen = 32;
+			size_t pubLen = 32;
+			privRaw.resize(32);
+			pubRaw.resize(32);
+			if (EVP_PKEY_get_raw_private_key(pkey, reinterpret_cast<unsigned char*>(privRaw.data()), &privLen) == 1
+				&& EVP_PKEY_get_raw_public_key(pkey, reinterpret_cast<unsigned char*>(pubRaw.data()), &pubLen) == 1) {
+				QJsonObject kObj;
+				kObj.insert(u"priv"_q, QString::fromLatin1(privRaw.toBase64()));
+				kObj.insert(u"pub"_q, QString::fromLatin1(pubRaw.toBase64()));
+				keysRoot.insert(keyId, kObj);
+				SaveJsonFile(SyncKeysPath(), keysRoot);
+			}
+		}
+	}
+	if (!pkey || pubRaw.size() != 32) {
+		if (pkey) EVP_PKEY_free(pkey);
+		return;
+	}
+
+	const auto pubB64 = QString::fromLatin1(pubRaw.toBase64());
+	payload.insert(u"pub_v2"_q, pubB64);
+
+	// Canonical JSON with sorted keys & escaped slashes to match Apple NSJSONSerialization([.sortedKeys]) byte-for-byte
+	QByteArray jsonBody = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+	jsonBody.replace("/", "\\/");
+	QByteArray material = u"mediatok-sync-v2:%1:"_q.arg(dialogId).toUtf8();
+	material.append(jsonBody);
+
+	EVP_MD_CTX *mctx = EVP_MD_CTX_new();
+	if (mctx) {
+		size_t sigLen = 64;
+		QByteArray sigRaw(64, Qt::Uninitialized);
+		if (EVP_DigestSignInit(mctx, nullptr, nullptr, nullptr, pkey) == 1
+			&& EVP_DigestSign(
+				mctx,
+				reinterpret_cast<unsigned char*>(sigRaw.data()),
+				&sigLen,
+				reinterpret_cast<const unsigned char*>(material.constData()),
+				size_t(material.size())) == 1
+			&& sigLen == 64) {
+			payload.insert(u"sig_v2"_q, QString::fromLatin1(sigRaw.toBase64()));
+		}
+		EVP_MD_CTX_free(mctx);
+	}
+	EVP_PKEY_free(pkey);
+}
+
 void ApplyRemoteIntegrationsJson(int64 dialogId, const QJsonObject &obj) {
 	if (!dialogId) return;
+	SaveRemoteSyncProfileCache(dialogId, obj);
 	auto allInt = LoadJsonFile(IntegrationsPath());
 	auto pInt = allInt.value(QString::number(dialogId)).toObject();
 	bool changed = false;

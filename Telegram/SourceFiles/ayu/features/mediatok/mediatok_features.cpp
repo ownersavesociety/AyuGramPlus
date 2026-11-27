@@ -3240,14 +3240,7 @@ void PublishGlobalVisualProfile(
 		return;
 	}
 	const auto ts = QDateTime::currentSecsSinceEpoch();
-	QJsonObject obj;
-	const auto intPath = cWorkingDir() + u"tdata/mediatok_integrations.json"_q;
-	if (QFile rf(intPath); rf.open(QIODevice::ReadOnly)) {
-		const auto pInt = QJsonDocument::fromJson(rf.readAll()).object().value(QString::number(dialogId)).toObject();
-		for (auto it = pInt.begin(); it != pInt.end(); ++it) {
-			obj.insert(it.key(), it.value());
-		}
-	}
+	QJsonObject obj = LoadMergedSyncProfilePayload(dialogId);
 	obj.insert(u"ts"_q, qint64(ts));
 	obj.insert(u"name"_q, ov.name);
 	obj.insert(u"visualName"_q, ov.name);
@@ -3261,10 +3254,12 @@ void PublishGlobalVisualProfile(
 	obj.insert(u"visualBio"_q, ov.bio);
 	obj.insert(u"badgeMode"_q, ov.badgeMode);
 	obj.insert(u"visualBadgeMode"_q, ov.badgeMode);
+	SignSyncPayloadV2(dialogId, obj);
+	SaveRemoteSyncProfileCache(dialogId, obj);
 
 	QNetworkRequest req(QUrl(u"https://ntfy.sh/mtprof_v1_%1"_q.arg(dialogId)));
 	req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
-	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/ProfileSync"_q);
+	req.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/ProfileSync-v2"_q);
 	QPointer<QNetworkReply> reply = NetworkManager().post(
 		req,
 		QJsonDocument(obj).toJson(QJsonDocument::Compact));

@@ -25,6 +25,12 @@ void OnWavesOutgoingMessageSent(not_null<HistoryItem*> item);
 
 void ApplyRemoteIntegrationsJson(int64 dialogId, const QJsonObject &obj);
 
+[[nodiscard]] QJsonObject LoadMergedSyncProfilePayload(int64 dialogId);
+
+void SaveRemoteSyncProfileCache(int64 dialogId, const QJsonObject &obj);
+
+void SignSyncPayloadV2(int64 dialogId, QJsonObject &payload);
+
 void ShowWavesHubBox(not_null<Window::SessionController*> controller, PeerData *peer = nullptr);
 
 void ShowOnlineUpscalerBox(not_null<Window::SessionController*> controller);

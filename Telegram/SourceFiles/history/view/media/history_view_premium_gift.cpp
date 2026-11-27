@@ -539,7 +539,7 @@ ClickHandlerPtr OpenStarGiftLink(not_null<HistoryItem*> item) {
 		const auto quick = [=](not_null<Window::SessionController*> window) {
 			Settings::ShowStarGiftViewBox(window, data, itemId);
 		};
-		if (!openInsteadId) {
+		if (!openInsteadId || !IsServerMsgId(itemId.msg)) {
 			quick(controller);
 			return;
 		} else if (*requesting) {
