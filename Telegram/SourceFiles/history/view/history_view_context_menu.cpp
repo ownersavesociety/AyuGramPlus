@@ -1342,6 +1342,13 @@ bool AddSelectMessageAction(
 			}
 		}
 	}, &st::menuIconSelect);
+	if (!item->history()->peer->isSelf()) {
+		menu->addAction(u"Выбрать все от автора"_q, [=] {
+			if (const auto item = owner->message(itemId)) {
+				list->selectItemsFromAuthor(item);
+			}
+		}, &st::menuIconSelect);
+	}
 	if (!request.selectedItems.empty() && list->canSelectItemsUpTo(item)) {
 		menu->addAction(tr::lng_context_select_msg_bulk(tr::now), [=] {
 			if (const auto item = owner->message(itemId)) {

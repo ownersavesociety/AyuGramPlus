@@ -3286,6 +3286,37 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 					}
 				}
 			}, &st::menuIconSelect);
+			if (_history && !_history->peer->isSelf()) {
+				_menu->addAction(u"Выбрать все от автора"_q, [=] {
+					const auto anchor = session->data().message(itemId);
+					if (!anchor || !_history || hasSelectRestriction()) {
+						return;
+					}
+					clearTextSelection();
+					changeSelectionAsGroup(&_selected, anchor, SelectAction::Select);
+					const bool isUserChat = anchor->history()->peer->isUser();
+					const auto anchorFrom = anchor->from();
+					const bool anchorOut = anchor->out();
+					for (int b = int(_history->blocks.size()) - 1; b >= 0 && int(_selected.size()) < MaxSelectedItems; --b) {
+						const auto &msgs = _history->blocks[b]->messages;
+						for (int m = int(msgs.size()) - 1; m >= 0 && int(_selected.size()) < MaxSelectedItems; --m) {
+							const auto cand = msgs[m]->data();
+							if (!cand->canBeSelected() || cand->isService()) {
+								continue;
+							}
+							const bool sameAuthor = isUserChat
+								? (cand->out() == anchorOut)
+								: (cand->from() == anchorFrom && cand->out() == anchorOut);
+							if (sameAuthor) {
+								changeSelectionAsGroup(&_selected, cand, SelectAction::Select);
+							}
+						}
+					}
+					_accessibilitySelectionAnchor = nullptr;
+					update();
+					_widget->updateTopBarSelection();
+				}, &st::menuIconSelect);
+			}
 			const auto collectBetween = [=](
 					not_null<HistoryItem*> from,
 					not_null<HistoryItem*> to,

@@ -2080,6 +2080,37 @@ void ListWidget::selectItemsUpTo(not_null<HistoryItem*> item) {
 	update();
 }
 
+void ListWidget::selectItemsFromAuthor(not_null<HistoryItem*> item) {
+	if (hasSelectRestriction()) {
+		return;
+	}
+	clearTextSelection();
+	if (_delegate->listIsItemGoodForSelection(item)) {
+		changeSelectionAsGroup(_selected, item, SelectAction::Select);
+	}
+	const bool isUserChat = item->history()->peer->isUser();
+	const auto anchorFrom = item->from();
+	const bool anchorOut = item->out();
+	for (auto i = _items.rbegin(); i != _items.rend(); ++i) {
+		if (int(_selected.size()) >= MaxSelectedItems) {
+			break;
+		}
+		const auto cand = (*i)->data();
+		if (!cand->isRegular() || cand->isService() || !_delegate->listIsItemGoodForSelection(cand)) {
+			continue;
+		}
+		const bool sameAuthor = isUserChat
+			? (cand->out() == anchorOut)
+			: (cand->from() == anchorFrom && cand->out() == anchorOut);
+		if (sameAuthor) {
+			changeSelectionAsGroup(_selected, cand, SelectAction::Select);
+		}
+	}
+	_accessibilitySelectionAnchor = nullptr;
+	pushSelectedItems();
+	update();
+}
+
 void ListWidget::showEditCaptionUploadLayer(not_null<HistoryItem*> item) {
 	if (const auto view = viewForItem(item)) {
 		if (item->isUploading()) {
