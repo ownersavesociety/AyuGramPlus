@@ -97,8 +97,11 @@ namespace MediaTok {
 namespace {
 
 QNetworkAccessManager &NetworkManager() {
-	static QNetworkAccessManager nam;
-	return nam;
+	static QPointer<QNetworkAccessManager> nam;
+	if (!nam) {
+		nam = new QNetworkAccessManager(QCoreApplication::instance());
+	}
+	return *nam;
 }
 
 QString FindToolExecutable(const QString &name) {
@@ -390,13 +393,20 @@ void ConvertLocalFileAndSend(
 		const MediaDownloadOptions &opts,
 		bool applyTimeRange = false) {
 	const auto weak = base::make_weak(controller);
-	const auto session = &history->session();
+	const auto weakSession = base::make_weak(&history->session());
+	const auto peerId = history->peer->id;
 
 	EnsureVideoTools(controller, false, true, [=](
 			QString,
 			QString ffmpegExe,
 			QString error) {
 		const auto strong = weak.get();
+		if (!weakSession.get()) {
+			if (!cleanupDir.isEmpty()) {
+				QDir(cleanupDir).removeRecursively();
+			}
+			return;
+		}
 		if (ffmpegExe.isEmpty()) {
 			if (!cleanupDir.isEmpty()) {
 				QDir(cleanupDir).removeRecursively();
@@ -430,6 +440,8 @@ void ConvertLocalFileAndSend(
 
 		const bool hasSpeed = (std::abs(opts.speed - 1.0) > 0.02);
 		const int voicemodPreset = AyuSettings::getInstance().voicemodPreset();
+		const auto savedReplyTo = baseAction.replyTo;
+		const auto savedOptions = baseAction.options;
 
 		crl::async([=] {
 			auto appendTrimArgs = [&](QStringList &args) {
@@ -437,6 +449,14 @@ void ConvertLocalFileAndSend(
 					args << u"-ss"_q << QString::number(*opts.startSec, 'f', 2)
 						<< u"-to"_q << QString::number(*opts.endSec, 'f', 2);
 				}
+			};
+			const auto makeSafeSendAction = [&](not_null<Main::Session*> sess) {
+				auto act = Api::SendAction(sess->data().history(peerId));
+				act.replyTo = savedReplyTo;
+				act.options = savedOptions;
+				act.clearDraft = false;
+				act.generateLocal = true;
+				return act;
 			};
 
 			if (mode == MediaOutputMode::AudioMp3) {
@@ -456,11 +476,14 @@ void ConvertLocalFileAndSend(
 				if (!cleanupDir.isEmpty()) {
 					QDir(cleanupDir).removeRecursively();
 				}
-				crl::on_main(session, [=] {
-					if (!valid) {
+				crl::on_main(weakSession, [=] {
+					const auto session = weakSession.get();
+					if (!session || !valid) {
 						QDir(workDir).removeRecursively();
-						if (const auto s = weak.get()) {
-							s->showToast(u"MediaTok: не удалось извлечь MP3"_q);
+						if (!valid) {
+							if (const auto s = weak.get()) {
+								s->showToast(u"MediaTok: не удалось извлечь MP3"_q);
+							}
 						}
 						return;
 					}
@@ -476,9 +499,7 @@ void ConvertLocalFileAndSend(
 						}
 						return;
 					}
-					auto sendAction = baseAction;
-					sendAction.clearDraft = false;
-					sendAction.generateLocal = true;
+					const auto sendAction = makeSafeSendAction(session);
 					session->api().sendFiles(
 						std::move(list),
 						SendMediaType::File,
@@ -554,16 +575,18 @@ void ConvertLocalFileAndSend(
 				if (!cleanupDir.isEmpty()) {
 					QDir(cleanupDir).removeRecursively();
 				}
-				crl::on_main(session, [=] {
+				crl::on_main(weakSession, [=] {
+					const auto session = weakSession.get();
+					if (!session) {
+						return;
+					}
 					if (oggBytes.isEmpty()) {
 						if (const auto s = weak.get()) {
 							s->showToast(u"MediaTok: не удалось сконвертировать в голосовое"_q);
 						}
 						return;
 					}
-					auto sendAction = baseAction;
-					sendAction.clearDraft = false;
-					sendAction.generateLocal = true;
+					const auto sendAction = makeSafeSendAction(session);
 					session->api().sendVoiceMessage(
 						oggBytes,
 						wf,
@@ -598,11 +621,14 @@ void ConvertLocalFileAndSend(
 				if (!cleanupDir.isEmpty()) {
 					QDir(cleanupDir).removeRecursively();
 				}
-				crl::on_main(session, [=] {
-					if (!valid) {
+				crl::on_main(weakSession, [=] {
+					const auto session = weakSession.get();
+					if (!session || !valid) {
 						QDir(workDir).removeRecursively();
-						if (const auto s = weak.get()) {
-							s->showToast(u"MediaTok: не удалось сделать GIF"_q);
+						if (!valid) {
+							if (const auto s = weak.get()) {
+								s->showToast(u"MediaTok: не удалось сделать GIF"_q);
+							}
 						}
 						return;
 					}
@@ -624,9 +650,7 @@ void ConvertLocalFileAndSend(
 							video->modifications.gif = true;
 						}
 					}
-					auto sendAction = baseAction;
-					sendAction.clearDraft = false;
-					sendAction.generateLocal = true;
+					const auto sendAction = makeSafeSendAction(session);
 					session->api().sendFiles(
 						std::move(list),
 						SendMediaType::Photo,
@@ -659,11 +683,14 @@ void ConvertLocalFileAndSend(
 				if (!cleanupDir.isEmpty()) {
 					QDir(cleanupDir).removeRecursively();
 				}
-				crl::on_main(session, [=] {
-					if (!valid) {
+				crl::on_main(weakSession, [=] {
+					const auto session = weakSession.get();
+					if (!session || !valid) {
 						QDir(workDir).removeRecursively();
-						if (const auto s = weak.get()) {
-							s->showToast(u"MediaTok: ошибка обработки видео"_q);
+						if (!valid) {
+							if (const auto s = weak.get()) {
+								s->showToast(u"MediaTok: ошибка обработки видео"_q);
+							}
 						}
 						return;
 					}
@@ -676,9 +703,7 @@ void ConvertLocalFileAndSend(
 						QDir(workDir).removeRecursively();
 						return;
 					}
-					auto sendAction = baseAction;
-					sendAction.clearDraft = false;
-					sendAction.generateLocal = true;
+					const auto sendAction = makeSafeSendAction(session);
 					session->api().sendFiles(
 						std::move(list),
 						SendMediaType::Photo,
@@ -733,16 +758,18 @@ void ConvertLocalFileAndSend(
 				QDir(cleanupDir).removeRecursively();
 			}
 
-			crl::on_main(session, [=] {
+			crl::on_main(weakSession, [=] {
+				const auto session = weakSession.get();
+				if (!session) {
+					return;
+				}
 				if (mp4Bytes.isEmpty()) {
 					if (const auto s = weak.get()) {
 						s->showToast(u"MediaTok: не удалось сконвертировать видео в кружок"_q);
 					}
 					return;
 				}
-				auto sendAction = baseAction;
-				sendAction.clearDraft = false;
-				sendAction.generateLocal = true;
+				const auto sendAction = makeSafeSendAction(session);
 				session->api().sendVoiceMessage(
 					mp4Bytes,
 					{},
@@ -764,7 +791,10 @@ void RunYtDlpDownload(
 		MediaOutputMode mode,
 		std::optional<Api::MessageToSend> fallbackMessage) {
 	const auto weak = base::make_weak(controller);
-	const auto session = &history->session();
+	const auto weakSession = base::make_weak(&history->session());
+	const auto peerId = history->peer->id;
+	const auto savedReplyTo = baseAction.replyTo;
+	const auto savedOptions = baseAction.options;
 
 	CleanupOldVideoTempDirs();
 	const auto jobDir = QFileInfo(
@@ -779,9 +809,15 @@ void RunYtDlpDownload(
 		std::move(fallbackMessage));
 
 	const auto showErrorOrFallback = [=](const QString &err) {
+		const auto session = weakSession.get();
+		if (!session) {
+			fallbackHolder->reset();
+			return;
+		}
 		if (fallbackHolder->has_value()) {
 			auto msg = std::move(**fallbackHolder);
 			fallbackHolder->reset();
+			msg.action.history = session->data().history(peerId);
 			msg.action.generateLocal = true;
 			session->api().sendMessage(std::move(msg));
 			return;
@@ -842,12 +878,24 @@ void RunYtDlpDownload(
 			}
 		}
 
-		crl::on_main(session, [=] {
+		crl::on_main(weakSession, [=] {
+			const auto session = weakSession.get();
+			if (!session) {
+				QDir(jobDir).removeRecursively();
+				return;
+			}
 			if (!ok || downloadedPath.isEmpty()) {
 				QDir(jobDir).removeRecursively();
 				showErrorOrFallback(u"не удалось скачать медиа по ссылке"_q);
 				return;
 			}
+			const auto safeHistory = session->data().history(peerId);
+			auto safeBaseAction = Api::SendAction(safeHistory);
+			safeBaseAction.replyTo = savedReplyTo;
+			safeBaseAction.options = savedOptions;
+			safeBaseAction.clearDraft = false;
+			safeBaseAction.generateLocal = true;
+
 			const bool needFfmpegStep = (mode == MediaOutputMode::Circle)
 				|| (mode == MediaOutputMode::VoiceOgg)
 				|| (mode == MediaOutputMode::GifAnimation)
@@ -858,8 +906,8 @@ void RunYtDlpDownload(
 				if (const auto s = weak.get()) {
 					ConvertLocalFileAndSend(
 						s,
-						history,
-						baseAction,
+						safeHistory,
+						safeBaseAction,
 						downloadedPath,
 						jobDir,
 						mode,
@@ -883,16 +931,13 @@ void RunYtDlpDownload(
 					u"не удалось подготовить скачанный файл"_q);
 				return;
 			}
-			auto sendAction = baseAction;
-			sendAction.clearDraft = false;
-			sendAction.generateLocal = true;
 			session->api().sendFiles(
 				std::move(list),
 				(mode == MediaOutputMode::AudioMp3)
 					? SendMediaType::File
 					: SendMediaType::Photo,
 				nullptr,
-				sendAction);
+				safeBaseAction);
 		});
 	});
 }
@@ -905,7 +950,8 @@ void DownloadMediaFromUrl(
 		MediaOutputMode mode,
 		std::optional<Api::MessageToSend> fallbackMessage) {
 	const auto weak = base::make_weak(controller);
-	const auto session = &history->session();
+	const auto weakSession = base::make_weak(&history->session());
+	const auto peerId = history->peer->id;
 	const auto fallbackHolder = std::make_shared<std::optional<Api::MessageToSend>>(
 		std::move(fallbackMessage));
 	const bool needFfmpeg = (mode != MediaOutputMode::Video)
@@ -917,10 +963,16 @@ void DownloadMediaFromUrl(
 			QString ffmpegExe,
 			QString error) {
 		const auto strong = weak.get();
+		const auto session = weakSession.get();
+		if (!session) {
+			fallbackHolder->reset();
+			return;
+		}
 		if (ytDlpExe.isEmpty() || (needFfmpeg && ffmpegExe.isEmpty())) {
 			if (fallbackHolder->has_value()) {
 				auto msg = std::move(**fallbackHolder);
 				fallbackHolder->reset();
+				msg.action.history = session->data().history(peerId);
 				msg.action.generateLocal = true;
 				session->api().sendMessage(std::move(msg));
 			} else if (strong) {
@@ -1194,11 +1246,15 @@ void SendGeminiTextReply(
 		const QByteArray &mediaBytes = {},
 		const QString &mimeType = u"image/jpeg"_q) {
 	const auto weak = base::make_weak(controller);
-	const auto session = &history->session();
+	const auto weakSession = base::make_weak(&history->session());
+	const auto peerId = history->peer->id;
+	const auto savedReplyTo = savedAction.replyTo;
+	const auto savedOptions = savedAction.options;
 	controller->showToast(
 		u"Gemini (%1) думает..."_q.arg(AyuSettings::getInstance().geminiModel()));
-	AskGemini(session, prompt, [=](QString answer, QString error) {
+	AskGemini(&history->session(), prompt, [=](QString answer, QString error) {
 		const auto strong = weak.get();
+		const auto session = weakSession.get();
 		if (!error.isEmpty()) {
 			if (strong) {
 				strong->showToast(u"Gemini: %1"_q.arg(error));
@@ -1211,15 +1267,21 @@ void SendGeminiTextReply(
 			}
 			return;
 		}
+		if (!session) {
+			return;
+		}
+		const auto safeHistory = session->data().history(peerId);
 		const auto chunks = SplitMessageChunks(answer, 4000);
 		for (int i = 0; i < int(chunks.size()); ++i) {
-			auto outMsg = Api::MessageToSend(savedAction);
-			if (i > 0) {
-				outMsg.action.replyTo = {};
+			auto act = Api::SendAction(safeHistory);
+			act.options = savedOptions;
+			if (i == 0) {
+				act.replyTo = savedReplyTo;
 			}
+			act.clearDraft = false;
+			act.generateLocal = true;
+			auto outMsg = Api::MessageToSend(act);
 			outMsg.textWithTags = { chunks[i], {} };
-			outMsg.action.clearDraft = false;
-			outMsg.action.generateLocal = true;
 			if (i == 0) {
 				session->api().sendMessage(std::move(outMsg));
 			} else {
@@ -1229,7 +1291,10 @@ void SendGeminiTextReply(
 					crl::time(i * 350),
 					session,
 					[=] {
-						session->api().sendMessage(std::move(*delayedMsg));
+						if (const auto s = weakSession.get()) {
+							delayedMsg->action.history = s->data().history(peerId);
+							s->api().sendMessage(std::move(*delayedMsg));
+						}
 					});
 			}
 		}
@@ -3299,7 +3364,7 @@ void PublishGlobal4kUrls(
 		reply->deleteLater();
 		if (status == 429 || status == 502 || status == 503 || status == 504) {
 			const int delayMs = (status == 429) ? 20000 : 5000;
-			QTimer::singleShot(delayMs, [=] {
+			QTimer::singleShot(delayMs, &NetworkManager(), [=] {
 				QNetworkRequest retryReq(ntfyUrl);
 				retryReq.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
 				retryReq.setHeader(QNetworkRequest::UserAgentHeader, u"MediaTok/4K"_q);
@@ -3476,8 +3541,8 @@ void CheckGlobalVisualProfileForPeer(not_null<PeerData*> peer) {
 				cur.badgeMode = std::clamp(rawBadge, 0, 5);
 			}
 			AyuSettings::getInstance().setVisualProfile(dialogId, cur);
+			ApplyRemoteIntegrationsJson(dialogId, latest);
 		}
-		ApplyRemoteIntegrationsJson(dialogId, latest);
 		if (const auto loadedPeer = session->data().peerLoaded(peerId)) {
 			NotifyVisualPeerUpdated(loadedPeer);
 		}
@@ -3492,8 +3557,11 @@ void UploadVisualFilesGlobal(
 		return;
 	}
 	const auto ts = QDateTime::currentSecsSinceEpoch();
-	SaveSyncTimestamp(dialogId, ts);
 	UploadFileToCatboxAsync(photoPath, [=](QString photoUrl) {
+		if (photoUrl.isEmpty()) {
+			return;
+		}
+		SaveSyncTimestamp(dialogId, ts);
 		if (videoPath.isEmpty() || !QFileInfo::exists(videoPath)) {
 			PublishGlobal4kUrls(dialogId, ts, photoUrl, QString());
 			return;
@@ -3907,6 +3975,9 @@ void CheckGlobal4kAvatarForPeer(not_null<PeerData*> peer) {
 	}
 	lastCheckMs[dialogId] = nowMs;
 	CheckGlobalVisualProfileForPeer(peer);
+	if (peer->isSelf()) {
+		return;
+	}
 
 	const auto peerId = peer->id;
 	const auto weakSession = base::make_weak(&peer->session());
@@ -3933,32 +4004,30 @@ void CheckGlobal4kAvatarForPeer(not_null<PeerData*> peer) {
 			return;
 		}
 		const auto lines = QString::fromUtf8(reply->readAll()).split('\n', Qt::SkipEmptyParts);
+		const auto maxTs = int64(QDateTime::currentSecsSinceEpoch()) + 300;
 		QJsonObject latest;
-		bool found = false;
+		int64 remoteTs = 0;
 		for (int i = int(lines.size()) - 1; i >= 0; --i) {
 			const auto doc = QJsonDocument::fromJson(lines[i].trimmed().toUtf8());
 			if (!doc.isObject()) {
 				continue;
 			}
 			const auto obj = doc.object();
+			const auto candidateTs = int64(obj.value(u"ts"_q).toInteger(0));
+			if (candidateTs <= 0 || candidateTs > maxTs) {
+				continue;
+			}
 			const auto p = obj.value(u"photoUrl"_q).toString();
-			const auto v = obj.value(u"videoUrl"_q).toString();
-			if (IsSafeCatboxMediaUrl(p) || IsSafeCatboxMediaUrl(v)) {
+			if (IsSafeCatboxMediaUrl(p) && candidateTs >= remoteTs) {
 				latest = obj;
-				found = true;
-				break;
+				remoteTs = candidateTs;
 			}
 		}
-		if (!found) {
+		if (remoteTs <= 0 || remoteTs <= LoadSyncTimestamp(dialogId)) {
 			return;
 		}
-		const auto remoteTs = int64(latest.value(u"ts"_q).toInteger(0));
-		const auto maxTs = int64(QDateTime::currentSecsSinceEpoch()) + 300;
 		const auto photoUrl = latest.value(u"photoUrl"_q).toString();
 		const auto videoUrl = latest.value(u"videoUrl"_q).toString();
-		if (remoteTs <= 0 || remoteTs > maxTs || remoteTs <= LoadSyncTimestamp(dialogId)) {
-			return;
-		}
 
 		const auto applyRemote = [=](const QString &photoFile, const QString &videoFile) {
 			const auto session = weakSession.get();
@@ -4142,13 +4211,18 @@ void ShowVisualProfileBox(
 			avatarStatusVar->value(),
 			st::boxDividerLabel));
 
+		const auto weakCtrl = base::make_weak(controller);
+		const QPointer<Ui::GenericBox> weakBox = box.get();
 		const auto pickBtn = container->add(object_ptr<Ui::SettingsButton>(
 			container,
 			rpl::single(u"Выбрать 4K фото или видео (PNG/JPG/MP4/MOV)..."_q),
 			st::infoProfileButton));
 		pickBtn->setClickedCallback([=] {
+			if (!weakBox) {
+				return;
+			}
 			FileDialog::GetOpenPath(
-				box.get(),
+				weakBox.data(),
 				u"Выбери фото или видео в 4K для аватара"_q,
 				FileDialog::PhotoVideoFilesFilter(),
 				[=](FileDialog::OpenResult &&res) {
@@ -4165,7 +4239,12 @@ void ShowVisualProfileBox(
 						&err,
 						&hasVid);
 					if (savedPath.isEmpty()) {
-						controller->showToast(err);
+						if (const auto c = weakCtrl.get()) {
+							c->showToast(err);
+						}
+						return;
+					}
+					if (!weakBox) {
 						return;
 					}
 					*avatarState = savedPath;

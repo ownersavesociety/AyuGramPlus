@@ -23,6 +23,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QPointer>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 
@@ -441,7 +442,11 @@ void ShowLanguageStudioBox(
 		const auto listWrap = box->verticalLayout()->add(
 			object_ptr<Ui::VerticalLayout>(box->verticalLayout()));
 
+		const QPointer<Ui::GenericBox> weakBox = box.get();
 		const auto rebuild = std::make_shared<Fn<void()>>();
+		box->lifetime().add([=] {
+			*rebuild = nullptr;
+		});
 
 		const auto openEditPhraseBox = [=](const QString &key, const QString &hintLabel) {
 			const auto c = weak.get();
@@ -471,9 +476,13 @@ void ShowLanguageStudioBox(
 						Lang::GetInstance().applyValue(key.toUtf8(), nv.toUtf8());
 					}
 					SaveOverridesToDisk();
-					*filterVar = filterLabel();
 					ebox->closeBox();
-					(*rebuild)();
+					if (weakBox) {
+						*filterVar = filterLabel();
+						if (*rebuild) {
+							(*rebuild)();
+						}
+					}
 					if (const auto s = weak.get()) {
 						s->showToast(u"Фраза «%1» обновлена!"_q.arg(key));
 					}
@@ -482,15 +491,22 @@ void ShowLanguageStudioBox(
 					gOverrides.erase(key);
 					Lang::GetInstance().resetValue(key.toUtf8());
 					SaveOverridesToDisk();
-					*filterVar = filterLabel();
 					ebox->closeBox();
-					(*rebuild)();
+					if (weakBox) {
+						*filterVar = filterLabel();
+						if (*rebuild) {
+							(*rebuild)();
+						}
+					}
 				});
 				ebox->addButton(rpl::single(u"Отмена"_q), [=] { ebox->closeBox(); });
 			}));
 		};
 
 		*rebuild = [=] {
+			if (!weakBox) {
+				return;
+			}
 			while (listWrap->count() > 0) {
 				delete listWrap->widgetAt(0);
 			}

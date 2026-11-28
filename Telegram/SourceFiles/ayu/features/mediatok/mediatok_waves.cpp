@@ -45,6 +45,7 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QSaveFile>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtCore/QUrlQuery>
@@ -77,8 +78,11 @@ namespace MediaTok {
 namespace {
 
 QNetworkAccessManager &WavesNet() {
-	static QNetworkAccessManager nam;
-	return nam;
+	static QPointer<QNetworkAccessManager> nam;
+	if (!nam) {
+		nam = new QNetworkAccessManager(QCoreApplication::instance());
+	}
+	return *nam;
 }
 
 QString WavesConfigPath() {
@@ -107,9 +111,10 @@ QJsonObject LoadJsonFile(const QString &path) {
 
 void SaveJsonFile(const QString &path, const QJsonObject &obj) {
 	QDir().mkpath(QFileInfo(path).absolutePath());
-	QFile f(path);
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+	QSaveFile f(path);
+	if (f.open(QIODevice::WriteOnly)) {
 		f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+		f.commit();
 	}
 }
 
@@ -271,12 +276,19 @@ void LaunchSteamOpenIdLogin(
 		not_null<Window::SessionController*> controller,
 		int64 selfDialogId) {
 	const auto weakCtrl = base::make_weak(controller);
+	static QPointer<QTcpServer> activeSteamServer;
+	if (activeSteamServer) {
+		activeSteamServer->close();
+		activeSteamServer->deleteLater();
+		activeSteamServer = nullptr;
+	}
 	auto *server = new QTcpServer(&WavesNet());
 	if (!server->listen(QHostAddress::LocalHost, 0)) {
 		server->deleteLater();
 		controller->showToast(u"Не удалось открыть локальный порт для Steam OpenID"_q);
 		return;
 	}
+	activeSteamServer = server;
 	const quint16 port = server->serverPort();
 	const auto stateNonce = QString::number(base::RandomValue<uint64>(), 16);
 	const auto returnTo = u"http://127.0.0.1:%1/steam?mt_state=%2"_q.arg(port).arg(stateNonce);
@@ -296,8 +308,19 @@ void LaunchSteamOpenIdLogin(
 		if (!sock) {
 			return;
 		}
+		QObject::connect(sock, &QTcpSocket::disconnected, sock, &QObject::deleteLater);
+		const auto reqBuf = std::make_shared<QByteArray>();
+		const auto handled = std::make_shared<bool>(false);
 		QObject::connect(sock, &QTcpSocket::readyRead, sock, [=] {
-			const auto rawReq = QString::fromUtf8(sock->readAll());
+			if (*handled) {
+				return;
+			}
+			reqBuf->append(sock->readAll());
+			if (!reqBuf->contains("\r\n\r\n") && reqBuf->size() < 16384) {
+				return;
+			}
+			*handled = true;
+			const auto rawReq = QString::fromUtf8(*reqBuf);
 			const auto firstLine = rawReq.section('\r', 0, 0);
 			const auto reqPath = firstLine.section(' ', 1, 1);
 			const QUrl parsed(u"http://127.0.0.1%1"_q.arg(reqPath));
@@ -665,20 +688,29 @@ void ShowMusicHubBox(not_null<Window::SessionController*> controller) {
 		{ u"*.mp3"_q, u"*.wav"_q, u"*.flac"_q, u"*.ogg"_q, u"*.m4a"_q },
 		QDir::Files,
 		QDir::Name);
+	const auto weakCtrl = base::make_weak(controller);
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		const QPointer<Ui::GenericBox> weakBox = box.get();
 		box->setTitle(rpl::single(u"Offline Music Hub (%1)"_q.arg(files.size())));
 		box->verticalLayout()->add(object_ptr<Ui::SettingsButton>(
 			box, rpl::single(u"+ Добавить трек с ПК..."_q), st::infoProfileButton))->setClickedCallback([=] {
+			if (!weakBox) {
+				return;
+			}
 			FileDialog::GetOpenPath(
-				box.get(),
+				weakBox.data(),
 				u"Выберите аудиофайл"_q,
 				u"Audio (*.mp3 *.wav *.flac *.ogg *.m4a)"_q,
 				[=](FileDialog::OpenResult &&res) {
 					if (!res.paths.isEmpty()) {
 						const QFileInfo fi(res.paths.front());
 						QFile::copy(fi.absoluteFilePath(), dirPath + fi.fileName());
-						controller->showToast(u"Добавлен трек: %1"_q.arg(fi.fileName()));
-						box->closeBox();
+						if (const auto c = weakCtrl.get()) {
+							c->showToast(u"Добавлен трек: %1"_q.arg(fi.fileName()));
+						}
+						if (weakBox) {
+							weakBox->closeBox();
+						}
 					}
 				});
 		});
@@ -1353,8 +1385,11 @@ void DeliverNativeStarGiftInChat(
 				: MTP_textWithEntities(MTP_string(caption.trimmed()), MTP_vector<MTPMessageEntity>()));
 	} else {
 		using SFlag = MTPDmessageActionStarGift::Flag;
-		auto sFlags = MTPDmessageActionStarGift::Flags(SFlag::f_can_upgrade)
-			| (hideSenderName ? SFlag::f_name_hidden : SFlag::f_from_id);
+		auto sFlags = MTPDmessageActionStarGift::Flags(0);
+		if (!targetPeer->isSelf()) {
+			sFlags |= SFlag::f_can_upgrade;
+		}
+		sFlags |= (hideSenderName ? SFlag::f_name_hidden : SFlag::f_from_id);
 		if (!caption.trimmed().isEmpty()) {
 			sFlags |= SFlag::f_message;
 		}
@@ -1377,12 +1412,16 @@ void DeliverNativeStarGiftInChat(
 	}
 
 	using MFlag = MTPDmessageService::Flag;
-	const auto mFlags = MTPDmessageService::Flags(MFlag::f_out)
-		| (isChannel ? MFlag::f_post : MFlag::f_from_id);
+	auto mFlags = MTPDmessageService::Flags(0);
+	if (isChannel) {
+		mFlags |= MFlag::f_post;
+	} else if (!hideSenderName) {
+		mFlags |= (MFlag::f_out | MFlag::f_from_id);
+	}
 	const auto mtpMsg = MTP_messageService(
 		MTP_flags(mFlags),
 		MTP_int(0),
-		isChannel ? MTPPeer() : peerToMTP(senderPeerId),
+		(isChannel || hideSenderName) ? MTPPeer() : peerToMTP(senderPeerId),
 		peerToMTP(targetPeer->id),
 		MTPPeer(),
 		MTPMessageReplyHeader(),
@@ -1474,6 +1513,7 @@ void ShowVisualGiftSenderBox(not_null<Window::SessionController*> controller, Pe
 				if (!ctrl) return;
 				const auto &data = result.data();
 				ctrl->session().data().processUsers(data.vusers());
+				ctrl->session().data().processChats(data.vchats());
 				if (const auto dest = ctrl->session().data().peerLoaded(targetPeerId)) {
 					DeliverNativeStarGiftInChat(ctrl, dest, data.vgift(), true, caption, hideName);
 				}
@@ -1650,15 +1690,21 @@ void SignSyncPayloadV2(int64 dialogId, QJsonObject &payload) {
 		if (pkey) {
 			size_t privLen = 32;
 			size_t pubLen = 32;
-			privRaw.resize(32);
-			pubRaw.resize(32);
-			if (EVP_PKEY_get_raw_private_key(pkey, reinterpret_cast<unsigned char*>(privRaw.data()), &privLen) == 1
-				&& EVP_PKEY_get_raw_public_key(pkey, reinterpret_cast<unsigned char*>(pubRaw.data()), &pubLen) == 1) {
+			QByteArray tmpPriv(32, '\0');
+			QByteArray tmpPub(32, '\0');
+			if (EVP_PKEY_get_raw_private_key(pkey, reinterpret_cast<unsigned char*>(tmpPriv.data()), &privLen) == 1
+				&& EVP_PKEY_get_raw_public_key(pkey, reinterpret_cast<unsigned char*>(tmpPub.data()), &pubLen) == 1
+				&& privLen == 32 && pubLen == 32) {
+				privRaw = tmpPriv;
+				pubRaw = tmpPub;
 				QJsonObject kObj;
 				kObj.insert(u"priv"_q, QString::fromLatin1(privRaw.toBase64()));
 				kObj.insert(u"pub"_q, QString::fromLatin1(pubRaw.toBase64()));
 				keysRoot.insert(keyId, kObj);
 				SaveJsonFile(SyncKeysPath(), keysRoot);
+			} else {
+				privRaw.clear();
+				pubRaw.clear();
 			}
 		}
 	}
@@ -1673,7 +1719,7 @@ void SignSyncPayloadV2(int64 dialogId, QJsonObject &payload) {
 		auto trusted = tofuObj.value(keyId).toString().split(',', Qt::SkipEmptyParts);
 		if (!trusted.contains(pubB64)) {
 			trusted.prepend(pubB64);
-			while (trusted.size() > 3) {
+			while (trusted.size() > 6) {
 				trusted.removeLast();
 			}
 			tofuObj.insert(keyId, trusted.join(','));
@@ -1689,6 +1735,7 @@ void SignSyncPayloadV2(int64 dialogId, QJsonObject &payload) {
 	QByteArray material = u"mediatok-sync-v2:%1:"_q.arg(dialogId).toUtf8();
 	material.append(jsonBody);
 
+	bool signedOk = false;
 	EVP_MD_CTX *mctx = EVP_MD_CTX_new();
 	if (mctx) {
 		size_t sigLen = 64;
@@ -1702,8 +1749,12 @@ void SignSyncPayloadV2(int64 dialogId, QJsonObject &payload) {
 				size_t(material.size())) == 1
 			&& sigLen == 64) {
 			payload.insert(u"sig_v2"_q, QString::fromLatin1(sigRaw.toBase64()));
+			signedOk = true;
 		}
 		EVP_MD_CTX_free(mctx);
+	}
+	if (!signedOk) {
+		payload.remove(u"pub_v2"_q);
 	}
 	EVP_PKEY_free(pkey);
 }
@@ -1778,7 +1829,7 @@ bool VerifySyncPayloadV2(int64 dialogId, const QJsonObject &payload) {
 	if (trusted.contains(pubB64)) {
 		return true;
 	}
-	if (trusted.size() < 3) {
+	if (trusted.size() < 6) {
 		trusted.append(pubB64);
 		tofuObj.insert(keyId, trusted.join(','));
 		keysRoot.insert(u"tofu"_q, tofuObj);
@@ -1815,7 +1866,7 @@ void PublishMergedProfileToCloudAsync(
 			postReply->deleteLater();
 			if (status == 429 || status == 502 || status == 503 || status == 504) {
 				const int delayMs = (status == 429) ? 20000 : 5000;
-				QTimer::singleShot(delayMs, [=] {
+				QTimer::singleShot(delayMs, &WavesNet(), [=] {
 					QNetworkRequest retryReq(ntfyUrl);
 					retryReq.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_q);
 					retryReq.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(userAgent));
@@ -2015,6 +2066,7 @@ bool HandleWavesOutgoingText(
 					if (!ctrl) return;
 					const auto &data = result.data();
 					ctrl->session().data().processUsers(data.vusers());
+					ctrl->session().data().processChats(data.vchats());
 					if (const auto dest = ctrl->session().data().peerLoaded(targetPeerId)) {
 						DeliverNativeStarGiftInChat(ctrl, dest, data.vgift(), true, caption, false);
 					}

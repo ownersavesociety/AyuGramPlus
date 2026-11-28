@@ -35,6 +35,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
+#include <QtCore/QPointer>
 #include <QtCore/QRegularExpression>
 #include <QtGui/QBrush>
 #include <QtGui/QClipboard>
@@ -1212,8 +1213,15 @@ void ShowFontsStudioBox(
 		const auto listWrap = box->verticalLayout()->add(
 			object_ptr<Ui::VerticalLayout>(box->verticalLayout()));
 
+		const QPointer<Ui::GenericBox> weakBox = box.get();
 		const auto rebuild = std::make_shared<Fn<void()>>();
+		box->lifetime().add([=] {
+			*rebuild = nullptr;
+		});
 		*rebuild = [=] {
+			if (!weakBox) {
+				return;
+			}
 			while (listWrap->count() > 0) {
 				delete listWrap->widgetAt(0);
 			}
@@ -1244,8 +1252,11 @@ void ShowFontsStudioBox(
 					st::settingsButton,
 					{ &st::menuIconEdit }
 				)->setClickedCallback([=] {
+					if (!weakBox) {
+						return;
+					}
 					FileDialog::GetOpenPath(
-						box.get(),
+						weakBox.data(),
 						u"Выберите файл шрифта (.ttf или .otf)"_q,
 						u"Font Files (*.ttf *.otf)"_q,
 						[=](FileDialog::OpenResult &&res) {
@@ -1282,7 +1293,9 @@ void ShowFontsStudioBox(
 							if (const auto c = weak.get()) {
 								ApplyClientFontAndPromptRestart(c, fams.first(), fi.completeBaseName());
 							}
-							(*rebuild)();
+							if (weakBox && *rebuild) {
+								(*rebuild)();
+							}
 						});
 				});
 
